@@ -253,8 +253,10 @@ def message(config, local, invite, kind):
     mail.set_content(body)
     safe_body = html.escape(body).replace(html.escape(invitation_url(config, invite)),
         '<a href="' + html.escape(invitation_url(config, invite), quote=True) + '">Open your personal invitation</a>')
-    mail.add_alternative('<html><body><div style="font:15px/1.7 system-ui,sans-serif;max-width:600px;color:#152d35;white-space:pre-wrap">'
-                         + safe_body + '</div></body></html>', subtype='html')
+    paragraphs = ''.join('<p style="margin:0 0 18px">' + paragraph.replace('\n', '<br>') + '</p>'
+                         for paragraph in safe_body.strip().split('\n\n'))
+    mail.add_alternative('<html><body><div style="font:15px/1.7 Arial,sans-serif;max-width:600px;color:#152d35">'
+                         + paragraphs + '</div></body></html>', subtype='html')
     if kind == 'confirm':
         def stamp(value):
             return value.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')

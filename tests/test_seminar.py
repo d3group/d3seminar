@@ -79,6 +79,10 @@ class SeminarTests(unittest.TestCase):
         self.assertIn('#token=', plain)
         self.assertIn('Europe/Berlin', plain)
         self.assertNotIn(local['admin_secret'], str(mail))
+        html_body = mail.get_body(preferencelist=('html',)).get_content()
+        self.assertIn('<p ', html_body)
+        self.assertIn('<br>', html_body)
+        self.assertIn('>Open your personal invitation</a>', html_body)
 
     def test_confirmation_has_calendar_attachment(self):
         mail = seminar.message(CONFIG, seminar.settings(), self.invites()[0], 'confirm')
