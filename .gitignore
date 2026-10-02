@@ -1,0 +1,10 @@
+.private/
+.env
+.env.*
+!.env.example
+.clasp.json
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+test-results/
