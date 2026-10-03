@@ -18,6 +18,8 @@ jobs:
       - name: Check sender and response handling
         run: |
           python3 -m unittest discover -s tests -p 'test_*.py'
+          node --check site/app.js
+          node --check site/admin.js
   deploy:
     if: github.event_name == 'workflow_dispatch'
     needs: test

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="same-origin">
-  <meta name="description" content="Confirm your time for the D3 Research Seminar.">
+  <meta name="description" content="Find a shared time for the D3 Research Seminar.">
   <meta name="theme-color" content="#152d35">
   <title>D3 Research Seminar</title>
   <link rel="stylesheet" href="styles.css">
@@ -16,47 +16,44 @@
     <span class="edition" id="edition">SEMINAR</span>
   </header>
   <main>
-    <div class="pilot-banner" id="pilot-banner" hidden>Test seminar · The date below is for testing the invitation process.</div>
+    <div class="pilot-banner" id="pilot-banner" hidden>Test seminar · These sample dates are for testing. This pilot has one invited participant.</div>
     <section class="intro-grid">
       <div class="intro">
         <p class="eyebrow">A SPACE FOR IDEAS</p>
         <h1>A time to share<br>what’s <em>next.</em></h1>
         <p class="lead" id="subtitle">Ideas in progress. Time to discuss them.</p>
-        <p class="intro-copy">A seminar for sharing research, asking questions, and thinking together. Confirm your proposed time so we can put the programme together.</p>
-        <div class="invitation-note"><span class="note-number">01 /</span><p>Your invitation, your time.<br><span>Use the personal link in your email to respond.</span></p></div>
+        <p class="intro-copy">A seminar for sharing research, asking questions, and thinking together. Help us find one time when everyone can attend. Mark each option below; no account is needed.</p>
+        <div class="invitation-note"><span class="note-number">01 /</span><p>One seminar, everyone together.<br><span>Use the personal link in your email to respond.</span></p></div>
       </div>
       <section class="response-card" aria-labelledby="card-title">
-        <div class="card-top"><span class="eyebrow">YOUR SEMINAR TIME</span><span class="status-pill" id="status-pill">PREVIEW</span></div>
-        <h2 id="card-title">You’re invited.</h2>
-        <p class="card-intro" id="greeting">Here’s a look at the next session.</p>
-        <div class="session">
-          <div class="date-tile" aria-hidden="true"><span id="month">—</span><strong id="day">—</strong></div>
-          <div><h3 id="session-date">Loading seminar details…</h3><p id="session-time"></p><p class="venue" id="session-location"></p></div>
-        </div>
+        <div class="card-top"><span class="eyebrow">FIND OUR SEMINAR TIME</span><span class="status-pill" id="status-pill">PREVIEW</span></div>
+        <h2 id="card-title">When can you join?</h2>
+        <p class="card-intro" id="greeting">A few options. One shared time.</p>
+        <p class="poll-meta" id="poll-meta"></p>
+        <p class="poll-deadline" id="poll-deadline"></p>
+        <div class="session" id="final-session" hidden><div><h3>Our seminar time is confirmed.</h3><p id="final-time"></p><p class="venue" id="session-location"></p></div></div>
         <p id="notice" class="notice" role="status" aria-live="polite">Loading…</p>
         <form id="response-form" method="post" hidden>
           <input type="hidden" name="token" id="token">
           <input type="hidden" name="revision" id="revision">
-          <fieldset>
-            <legend>Does this time work for you?</legend>
-            <label class="choice"><input type="radio" name="response" value="confirmed" required><span><strong>Yes, this works</strong><small>Confirm my proposed time</small></span><span class="choice-symbol" aria-hidden="true">↗</span></label>
-            <label class="choice"><input type="radio" name="response" value="change_requested"><span><strong>I need another time</strong><small>Suggest an alternative below</small></span></label>
-            <label class="choice"><input type="radio" name="response" value="declined"><span><strong>I can’t take part</strong><small>Let the organizer know</small></span></label>
-          </fieldset>
+          <p class="poll-help">Mark every option that works. Choose “If necessary” only if you would need to rearrange something. Blank options stay unanswered.</p>
+          <div class="bulk-actions"><button class="text-button" type="button" id="all-available">All times work</button><button class="text-button" type="button" id="all-unavailable">None of these work</button></div>
+          <div id="poll-options"></div>
+          <p class="answer-progress" id="answer-progress" aria-live="polite"></p>
           <label class="notes-label" for="comment">A note for the organizer <span id="comment-hint">(optional)</span></label>
-          <textarea id="comment" name="comment" rows="3" maxlength="1000" placeholder="An alternative time, or anything we should know…"></textarea>
-          <button class="primary" id="submit-button" type="submit">Send my response <span aria-hidden="true">↗</span></button>
-          <p class="privacy">Your response is visible to the organizers. You can return through your email link to change it.</p>
+          <textarea id="comment" name="comment" rows="3" maxlength="1000" placeholder="If no option works, suggest other days or times…"></textarea>
+          <button class="primary" id="submit-button" type="submit">Save my availability <span aria-hidden="true">↗</span></button>
+          <p class="privacy">Only the organizers can see your availability. Keep your personal link private. You can update your answers until the time is finalized.</p>
         </form>
-        <div id="preview-actions" hidden><button class="primary" id="demo-button" type="button">Try the response form <span aria-hidden="true">↗</span></button><p class="privacy">A preview only. No response will be stored.</p></div>
-        <div id="demo-receipt" hidden><h3>That’s how responding will look.</h3><p>This was a demo. Nothing was sent or saved.</p><button class="secondary" id="demo-reset" type="button">Try another response</button></div>
-        <button class="calendar-link" id="calendar" type="button" hidden>Add proposed time to calendar <span aria-hidden="true">↗</span></button>
+        <div id="preview-actions" hidden><button class="primary" id="demo-button" type="button">Try the availability poll <span aria-hidden="true">↗</span></button><p class="privacy">A preview only. No response will be stored.</p></div>
+        <div id="demo-receipt" hidden><h3>That’s how responding will look.</h3><p>This was a demo. Nothing was sent or saved.</p><button class="secondary" id="demo-reset" type="button">Try the poll again</button></div>
+        <button class="calendar-link" id="calendar" type="button" hidden>Add confirmed time to calendar <span aria-hidden="true">↗</span></button>
       </section>
     </section>
     <section class="how-it-works" aria-label="What happens next">
-      <div><span>01</span><h3>Check your time</h3><p>Your email links to your proposed seminar slot.</p></div>
-      <div><span>02</span><h3>Send a response</h3><p>Confirm, suggest a change, or let us know you can’t join.</p></div>
-      <div><span>03</span><h3>We’ll be in touch</h3><p>The organizer will email you the final details.</p></div>
+      <div><span>01</span><h3>Mark your availability</h3><p>Use your personal email link to answer a short list of options.</p></div>
+      <div><span>02</span><h3>Find a time for everyone</h3><p>We’ll check any conditional answers with you before choosing a time.</p></div>
+      <div><span>03</span><h3>Save the final date</h3><p>Once everyone can attend, we’ll email the time and a calendar invitation.</p></div>
     </section>
   </main>
   <footer>

@@ -1,82 +1,109 @@
 # D3 seminar
 
-A seminar invitation MVP with a static website, a local Python backend, SQLite response storage, and personalized emails sent through JMU’s SMTP server. Python 3.10+ is sufficient to run it; there are no runtime packages to install.
+A private availability poll for finding one seminar time when the whole group can attend. The MVP uses a static website, a local Python backend, SQLite storage, and personalized emails through JMU’s SMTP server. Python 3.10+ is sufficient; there are no runtime packages to install.
 
-The local version covers individual invitations, confirmation and change requests, saved responses, one reminder for nonresponders, and final confirmation emails with calendar attachments. Emails are sent when the organizer runs a command. Saving a response does not automatically send mail.
+Every participant gets the same short list of times and a personal link. They mark each option **Available**, **If necessary**, or **Unavailable**. Blank options stay **Unknown**. Partial answers can be saved and completed later, and other participants cannot see them.
+
+The organizer dashboard shows saved answers, completion counts, notes, and availability for each candidate time. Finalization requires every required attendee to mark the chosen time Available. A majority, missing participants, unknown answers, and conditional replies cannot satisfy that rule.
 
 ## Run locally
 
-For a fresh checkout, initialize the private participant list and sender settings:
+For a fresh checkout, initialize your private settings and one test participant:
 
 ```sh
 python3 scripts/seminar.py init --email YOUR_UNIVERSITY_EMAIL --name 'Your name' --smtp-user YOUR_JMU_USERNAME
 python3 scripts/server.py
 ```
 
-Open **http://127.0.0.1:8765/**. Keep the server running. In another terminal:
+Keep the server running. In another terminal, from the project folder:
 
 ```sh
 python3 scripts/seminar.py sync
-python3 scripts/seminar.py smtp-check
-python3 scripts/seminar.py send invite --to YOUR_UNIVERSITY_EMAIL
+python3 scripts/seminar.py open-test
+python3 scripts/seminar.py admin
 ```
 
-The `send` command creates a preview in `.private/outbox/`; it sends nothing without `--send`. Open the `.eml` file to review the invitation. In test mode only the address used during initialization can receive mail. The sample date is explicitly a test date.
+The last two commands open your personal test invitation and authenticated organizer dashboard on macOS. The public preview is at **http://127.0.0.1:8765/**. The dashboard key is kept out of the address bar after loading and lasts only for that page session; rerun `admin` after a browser reload.
+
+The supplied configuration has four 30-minute sample options, a sample response deadline, and **one required participant for the test**. It does not claim that the other 19 people have been invited.
 
 ## Test with your university mailbox
 
-Run this command, or double-click `scripts/test-mail.command` on macOS:
+Preview a personalized poll invitation without sending it:
+
+```sh
+python3 scripts/seminar.py send invite --to YOUR_UNIVERSITY_EMAIL
+```
+
+Review the `.eml` in `.private/outbox/`. To send only to your configured test address:
 
 ```sh
 python3 scripts/seminar.py test-mail invite
 ```
 
-Enter your university password in the terminal prompt. The sender does not display or store it. The configured SMTP service is `mailmaster.uni-wuerzburg.de:465` with certificate-verified TLS, as documented by [JMU IT](https://www.rz.uni-wuerzburg.de/dienste/kommunikation/e-mail/serverdaten/). JMU’s SMTP username is the JMU account username, which may differ from the email address. Use `configure --smtp-user YOUR_USERNAME` to update it.
+Enter your JMU password in Terminal. It is not displayed or stored. SMTP uses `mailmaster.uni-wuerzburg.de:465` with certificate-verified TLS. The SMTP username is your JMU account username, which may differ from your email address. `configure --smtp-user YOUR_USERNAME` updates it. `smtp-check` checks the connection without logging in or sending.
 
-1. Check that the test invitation arrives in your university inbox. SMTP acceptance means the server accepted the message; check your inbox or spam folder to verify delivery.
-2. Before responding, use `python3 scripts/seminar.py test-mail remind` to test the reminder.
-3. Open the invitation link **on the same Mac running the server**. Localhost links will not work from your phone or another person’s computer.
-4. Select **I need another time**, suggest an alternative, and submit. A receipt appears after the SQLite transaction commits.
-5. Run `python3 scripts/seminar.py status` to see the saved response. Reopen the email link and check that the previous response is prefilled.
-6. Change the response to **Yes, this works**, then run `python3 scripts/seminar.py test-mail confirm`. Check the confirmation email and its `.ics` attachment.
+1. Open the email link on the same Mac running the server. Localhost links do not work from another device.
+2. Answer some options and save. The **Response saved** receipt appears only after the SQLite transaction commits. A demo response explicitly says that nothing was saved.
+3. Reopen the personal link to see your saved answers. Open the organizer dashboard and click **Refresh responses**, or run `python3 scripts/seminar.py status` for a private snapshot.
+4. To test reconfirmation, mark one option **If necessary**, answer the rest, then choose **Ask to reconfirm** in the dashboard. Run `python3 scripts/seminar.py test-mail check`. Reopen the personal link and change the highlighted option to **Available** if you can commit. Choosing Unavailable or clearing that option cancels the proposal.
+5. Refresh the dashboard and choose **Finalize this time**. This closes the poll and prevents later edits to the selected seminar or roster. It sends no email by itself.
+6. Run `python3 scripts/seminar.py test-mail confirm`. The final email contains the selected time and an `.ics` attachment. The participant page also offers the confirmed calendar download.
 
-Repeated commands skip messages already sent or attempted. If the network fails during SMTP delivery, the sender records an `attempted` entry and does not retry automatically. Check the inbox before removing that entry from `.private/invitations.json` to retry. This avoids duplicate emails after an ambiguous timeout.
+Finalization is intentional and closes this campaign. Before testing that last step, finish any response-editing checks. To start a separate seminar after finalization, stop the server, move `.private/invitations.json` and `.private/responses.sqlite3` together into a private archive directory, change `campaign_id` and the dates, run `prepare`, restart the server, and run `sync`. Retain `.private/settings.json` for the sender settings.
 
-## Manage participants and dates
+## Coordinate the group
 
-Public seminar details and available slots are in `site/config.json`. The local server overrides its website and backend URLs with localhost settings; it never changes the public configuration to contain participant data. Restart the server after editing the public configuration.
+Edit `site/config.json` with the real title, location, timezone, response deadline, and a shortlist of candidate times. Each option must have a unique ID, an explicit UTC offset, and the same duration. Set `required_participants` to **20** for this group. The deadline is a requested reply date; late answers remain possible until finalization.
 
-The private CSV at `.private/participants.csv` has columns `name,email,slot_id`. The slot ID must match an entry in the public configuration. After changing the CSV or seminar details:
+The private `.private/participants.csv` uses columns `name,email`. Every listed person is required. An old `slot_id` column is ignored because the whole group now answers the same poll. Set `test_mode` to `false` only when you have replaced the sample dates and are ready to use the full roster.
+
+After editing the roster or poll:
 
 ```sh
 python3 scripts/seminar.py prepare
+# Restart scripts/server.py after config changes.
 python3 scripts/seminar.py sync
-python3 scripts/seminar.py status
+python3 scripts/seminar.py admin
 ```
 
-Changing a slot’s details rotates its invitation tokens and clears the associated delivery history. Synchronizing then invalidates the old links and resets those responses, so participants confirm the new details. Removing a participant from the CSV and synchronizing revokes that person’s invitation. Synchronizing an unchanged invitation preserves its response.
+`prepare` keeps existing personal links and delivery history. A change to poll details resets availability on `sync`, so everyone answers the revised options explicitly. Previous invitations are archived under `.private/history/`; SQLite retains the old response records in its history table. Old email links load the current poll. A submission from a stale, already-open form is rejected. Removing a participant and syncing revokes that person's link. Unchanged polls preserve saved answers.
 
-For a real seminar, set `test_mode` to `false` only after testing and replacing the sample details. `send invite --all` previews the individual emails. Add `--send` to deliver. `send remind --all --send` sends one reminder to invited people who are still pending. `send confirm --all --send` sends final details to people who confirmed. The sender checks live responses before starting each batch; a participant can still update a response while the batch is being delivered.
+If no common time works, review the private notes, add or replace candidate times, and prepare and sync another round. The dashboard will never select a majority winner automatically. Before finalization, the backend checks current responses again; a changed response invalidates a stale dashboard action.
 
-## Private data and access
+Email is controlled from Terminal. These commands create previews; append `--send` to deliver:
 
-The server binds to `127.0.0.1` and serves only the four website files plus its API. It does not expose the repository or `.private/`. Responses persist in `.private/responses.sqlite3` across server restarts. Back up `.private/` privately; it also contains invitation tokens and the delivery ledger. The files are excluded from Git, and the website deployment uploads only `site/`.
+```sh
+python3 scripts/seminar.py send invite --all
+python3 scripts/seminar.py send remind --all
+python3 scripts/seminar.py send check --all
+python3 scripts/seminar.py send confirm --all
+```
 
-Each invitation uses a random 256-bit token. SQLite stores its hash. The browser sends the token to the local API, which authorizes access to only that invitation. Anyone with the full invitation link can view and update its response. Links use URL fragments, and requests and responses are not cached or logged. Looking at an email link or loading the site never confirms attendance.
+Invitations go to people who have not completed the current poll. Reminders go only to invited people with unfinished answers, once per poll revision. After **Ask to reconfirm**, `check` contacts only people who marked that candidate If necessary. After finalization, `confirm` sends the chosen time and calendar attachment to every registered participant. The sender checks saved responses again after the password prompt and before each message. Saving answers or clicking a dashboard button never sends email automatically.
+
+Repeated commands skip messages already sent or attempted. An SMTP timeout can occur after the mail server has accepted a message; the sender records the attempt before sending and does not retry automatically. Check the inbox before removing that specific delivery entry from `.private/invitations.json` to retry.
+
+## Private data
+
+The server binds to `127.0.0.1` and serves an explicit list of website files and API endpoints. It does not expose the repository or `.private/`. Availability persists in `.private/responses.sqlite3` across restarts. Back up `.private/` privately; it also contains personal invitation tokens, the organizer key, and the delivery ledger. Git ignores these files, and website deployment uploads only `site/`.
+
+Personal links contain random 256-bit tokens. SQLite stores their hashes. Possession of a link allows its holder to view and update that participant's answers before finalization. The participant API returns only their own answers and seminar details. Organizer actions and the full response list require a separate secret. Requests are not logged or cached; opening a link never submits a response.
 
 ## GitHub Pages
 
-The **Test and publish seminar site** workflow tests pushes to `main`. Publishing is manual through **Actions → Test and publish seminar site → Run workflow**, after enabling **GitHub Actions** as the source in [Pages settings](https://github.com/d3group/d3seminar/settings/pages). The intended address is `https://d3group.github.io/d3seminar/`.
+The **Test and publish seminar site** workflow tests pushes to `main`. Publishing is manual through **Actions → Test and publish seminar site → Run workflow**, after enabling GitHub Actions in [Pages settings](https://github.com/d3group/d3seminar/settings/pages). The intended address is `https://d3group.github.io/d3seminar/`.
 
-GitHub Pages can display the public preview now. The local backend cannot collect responses from other people on the internet. Before sending real invitations, deploy a backend reachable over HTTPS and configure the website and API access for it, or reconnect a managed service such as Apps Script. Do not expose this development server directly to the internet. The current local implementation deliberately accepts API requests only from its own origin.
+GitHub Pages can display the public preview. The local backend cannot collect responses from people on the internet. Before sending invitations to the real group, deploy a backend reachable over HTTPS and configure the site and API for it, or reconnect a managed backend. The development server currently accepts API requests only from its own local origin.
 
 ## Checks
 
 ```sh
 python3 -m unittest discover -s tests -p 'test_*.py'
 node --check site/app.js
+node --check site/admin.js
 ```
 
-The automated tests cover persistent responses, invalid and revoked links, revision checks, atomic synchronization, access controls, private file isolation, email previews, recipient restrictions, calendar attachments, and duplicate-send protection. HTTP tests open a temporary loopback port.
+Tests cover persistent and partial answers, unknown values, 20-person scheduling, conditional reconfirmation, incomplete rosters, stale dashboard actions, finalization, migration history, access controls, email targeting, calendar attachments, and duplicate-send protection. HTTP tests use a temporary loopback port.
 
-For the browser checks, install Playwright in a development environment and run `node tests/browser.mjs`. Alternatively, set `PLAYWRIGHT_MODULE` to an existing Playwright module path. This starts an isolated local database, tests the form at desktop and mobile sizes, and saves screenshots under the ignored `test-results/` directory. It does not use your real invitation or send email.
+With Playwright available, run `node tests/browser.mjs`, or set `PLAYWRIGHT_MODULE` to an existing installation. The browser checks use an isolated database and test desktop and mobile layouts, saving screenshots under ignored `test-results/`. They do not alter your real poll or send email.

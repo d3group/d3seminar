@@ -11,11 +11,10 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlencode, urlparse
-from zoneinfo import ZoneInfo
 
 import seminar
 
-RESPONSES = {'confirmed', 'change_requested', 'declined'}
+ANSWERS = {'available', 'if_needed', 'unavailable'}
 
 
 class Store:
@@ -24,6 +23,8 @@ class Store:
         self.database.parent.mkdir(exist_ok=True, parents=True, mode=0o700)
         with self.connect() as connection:
             connection.execute('CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL, data TEXT NOT NULL)')
+            connection.execute('CREATE TABLE IF NOT EXISTS poll_state (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)')
+            connection.execute('CREATE TABLE IF NOT EXISTS history (saved_at TEXT NOT NULL, data TEXT NOT NULL)')
         self.database.chmod(0o600)
 
     @contextmanager
@@ -35,6 +36,16 @@ class Store:
         finally:
             connection.close()
 
+    def state(self, connection):
+        row = connection.execute('SELECT data FROM poll_state WHERE id=1').fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def write_state(self, connection, state):
+        connection.execute('INSERT INTO poll_state VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', (json.dumps(state),))
+
+    def records(self, connection):
+        return [json.loads(row[0]) for row in connection.execute('SELECT data FROM invitations ORDER BY id')]
+
     def validate(self, invite):
         if not isinstance(invite, dict):
             raise ValueError('Invalid invitation.')
@@ -43,17 +54,11 @@ class Store:
                 raise ValueError('Invalid invitation.')
         if not isinstance(invite.get('name'), str) or not 1 <= len(invite['name']) <= 120 or any(c in invite['name'] for c in '\r\n'):
             raise ValueError('Invalid participant name.')
-        seminar.email_address(invite['email'])
-        event = invite['event']
-        expected = {'campaign_id', 'end', 'location', 'slot_id', 'start', 'timezone', 'title'}
-        if set(event) != expected or any(not isinstance(value, str) or not 1 <= len(value) <= 300 for value in event.values()):
-            raise ValueError('Invalid seminar details.')
-        ZoneInfo(event['timezone'])
-        start, end = datetime.fromisoformat(event['start']), datetime.fromisoformat(event['end'])
-        if start.tzinfo is None or end.tzinfo is None or end <= start:
-            raise ValueError('Invalid seminar time.')
-        if seminar.event_revision(event) != invite['revision']:
-            raise ValueError('Seminar revision does not match.')
+        if seminar.email_address(invite['email']) != invite['email']:
+            raise ValueError('Normalize participant email addresses first.')
+        seminar.validate_poll(invite['poll'])
+        if seminar.event_revision(invite['poll']) != invite['revision']:
+            raise ValueError('Poll revision does not match.')
         base = urlparse(invite['site_url'])
         if base.scheme != 'http' or base.hostname not in ('127.0.0.1', 'localhost') or base.path != '/' or base.query or base.fragment:
             raise ValueError('Use the local seminar website for this backend.')
@@ -66,15 +71,27 @@ class Store:
         for field in ('id', 'email', 'token_hash'):
             if len({item[field] for item in invites}) != len(invites):
                 raise ValueError('Duplicate ' + field + '.')
+        if len({item['revision'] for item in invites}) != 1:
+            raise ValueError('All participants must receive the same candidate times.')
         with self.connect() as connection:
             connection.execute('BEGIN IMMEDIATE')
-            existing = {row[0]: json.loads(row[1]) for row in connection.execute('SELECT id, data FROM invitations')}
+            existing = {row['id']: row for row in self.records(connection)}
+            state = self.state(connection)
+            def identity(records):
+                return sorted((r['id'], r['email'], r['token_hash'], r['revision']) for r in records)
+            changed = identity(invites) != identity(r for r in existing.values() if r['active'])
+            if changed and state.get('final_event'):
+                raise ValueError('This seminar is finalized. Archive it and start a new campaign before changing the roster or times.')
+            if changed:
+                if existing:
+                    connection.execute('INSERT INTO history VALUES (?, ?)', (seminar.now(), json.dumps(dict(records=list(existing.values()), state=state))))
+                self.write_state(connection, {})
             current = set()
             for invite in invites:
                 current.add(invite['id'])
                 old = existing.get(invite['id'])
-                preserve = old and old['active'] and old['token_hash'] == invite['token_hash'] and old['revision'] == invite['revision']
-                record = dict(invite, active=True, response=old['response'] if preserve else 'pending',
+                preserve = old and old['active'] and 'poll' in old and old['token_hash'] == invite['token_hash'] and old['revision'] == invite['revision']
+                record = dict(invite, active=True, answers=old['answers'] if preserve else {},
                               comment=old['comment'] if preserve else '', updated_at=old['updated_at'] if preserve else '')
                 connection.execute('INSERT INTO invitations VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET token_hash=excluded.token_hash, data=excluded.data',
                                    (record['id'], record['token_hash'], json.dumps(record)))
@@ -91,38 +108,97 @@ class Store:
         record = json.loads(row[0]) if row else None
         if not record or not record['active']:
             raise ValueError('This invitation has expired or is invalid. Please ask the organizer for a new link.')
+        if 'poll' not in record:
+            raise ValueError('The organizer is updating this invitation. Please try again shortly.')
         return record
 
     def invitation(self, token):
         with self.connect() as connection:
+            connection.execute('BEGIN')
             record = self.lookup(connection, token)
-        return {key: record[key] for key in ('name', 'event', 'revision', 'response', 'comment', 'updated_at')}
+            result = {key: record[key] for key in ('name', 'poll', 'revision', 'answers', 'comment', 'updated_at')}
+            result['state'] = self.state(connection)
+            return result
 
     def respond(self, params):
-        response = params.get('response')
         comment = params.get('comment', '')
-        if response not in RESPONSES:
-            raise ValueError('Please choose a response.')
         if not isinstance(comment, str) or len(comment) > 1000:
             raise ValueError('Please keep your note under 1,000 characters.')
-        comment = comment.strip()
-        if response == 'change_requested' and not comment:
-            raise ValueError('Please suggest an alternative time.')
         with self.connect() as connection:
             connection.execute('BEGIN IMMEDIATE')
             record = self.lookup(connection, params.get('token'))
             if params.get('revision') != record['revision']:
-                raise ValueError('The seminar details have changed. Please use your latest invitation.')
-            if record['response'] != response or record['comment'] != comment:
-                record.update(response=response, comment=comment, updated_at=datetime.now(timezone.utc).isoformat())
+                raise ValueError('The candidate times have changed. Reopen your invitation and check all options again.')
+            state = self.state(connection)
+            if state.get('final_event'):
+                raise ValueError('The seminar time is finalized. Please contact Aabhash if your availability has changed.')
+            ids = {slot['id'] for slot in record['poll']['slots']}
+            answers = {}
+            for key, value in params.items():
+                if key.startswith('answer:'):
+                    slot_id = key[7:]
+                    if slot_id not in ids or value not in ANSWERS | {''}:
+                        raise ValueError('Invalid availability option.')
+                    if value:
+                        answers[slot_id] = value
+            if record['answers'] != answers or record['comment'] != comment.strip() or not record['updated_at']:
+                record.update(answers=answers, comment=comment.strip(), updated_at=datetime.now(timezone.utc).isoformat())
                 connection.execute('UPDATE invitations SET data=? WHERE id=?', (json.dumps(record), record['id']))
+                if state.get('proposed_slot_id') and answers.get(state['proposed_slot_id']) not in {'available', 'if_needed'}:
+                    self.write_state(connection, {})
         return record
 
     def responses(self):
         with self.connect() as connection:
-            records = [json.loads(row[0]) for row in connection.execute('SELECT data FROM invitations')]
-        keys = ('id', 'email', 'revision', 'response', 'comment', 'updated_at', 'token_hash')
-        return [{key: record[key] for key in keys} for record in records if record['active']]
+            keys = ('id', 'name', 'email', 'revision', 'answers', 'comment', 'updated_at', 'token_hash')
+            return [{key: record[key] for key in keys} for record in self.records(connection) if record['active'] and 'poll' in record]
+
+    def dashboard(self, connection=None):
+        if connection is None:
+            with self.connect() as conn:
+                conn.execute('BEGIN')
+                return self.dashboard(conn)
+        records = [r for r in self.records(connection) if r['active'] and 'poll' in r]
+        state = self.state(connection)
+        poll = records[0]['poll'] if records else None
+        slots = []
+        required = poll['required_participants'] if poll else 0
+        for slot in poll['slots'] if poll else []:
+            counts = {value: sum(r['answers'].get(slot['id']) == value for r in records) for value in ANSWERS}
+            counts['unknown'] = max(required, len(records)) - sum(counts.values())
+            ready = len(records) == required and counts['available'] == required
+            can_propose = len(records) == required and not counts['unknown'] and not counts['unavailable'] and counts['if_needed'] > 0
+            slots.append(dict(slot, **counts, ready=ready, can_propose=can_propose))
+        people = [dict(id=r['id'], name=r['name'], email=r['email'], answers=r['answers'], comment=r['comment'], updated_at=r['updated_at'],
+                       complete=len(r['answers']) == len(poll['slots'])) for r in records]
+        return dict(poll=poll, state=state, participants=people, slots=slots, registered=len(records), required=required,
+                    completed=sum(p['complete'] for p in people), snapshot=seminar.event_revision(dict(records=records, state=state)))
+
+    def select(self, action, slot_id, snapshot):
+        with self.connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            dashboard = self.dashboard(connection)
+            if dashboard['snapshot'] != snapshot:
+                raise ValueError('Responses changed. Refresh the dashboard and check the latest availability.')
+            state = dashboard['state']
+            if state.get('final_event'):
+                raise ValueError('This seminar is already finalized.')
+            slot = next((s for s in dashboard['slots'] if s['id'] == slot_id), None)
+            if not slot:
+                raise ValueError('Choose a candidate time.')
+            if action == 'finalize':
+                if not slot['ready']:
+                    raise ValueError('Everyone in the required group must mark this time Available before it can be finalized.')
+                state.update(final_event=seminar.event_data(dashboard['poll'], slot), finalized_at=datetime.now(timezone.utc).isoformat())
+            elif action == 'propose':
+                if not slot['can_propose']:
+                    raise ValueError('A reconfirmation needs responses from everyone and no Unavailable responses for this time.')
+                if state.get('proposed_slot_id') != slot_id:
+                    state.update(proposed_slot_id=slot_id, proposal_id=datetime.now(timezone.utc).isoformat())
+            else:
+                raise ValueError('Unknown selection action.')
+            self.write_state(connection, state)
+        return state
 
 
 def page(title, body):
@@ -133,14 +209,12 @@ def page(title, body):
 
 
 def receipt(record, token):
-    messages = {'confirmed':'Your proposed time is confirmed.', 'change_requested':'Your request for another time has been saved.',
-                'declined':'The organizer will know that you cannot take part.'}
-    when = datetime.fromisoformat(record['event']['start']).astimezone(ZoneInfo(record['event']['timezone']))
-    link = record['site_url'] + '#' + urlencode(dict(token=token, slot=record['event']['slot_id'], name=record['name'], revision=record['revision']))
-    return page('Response saved.', '<p>Thank you, ' + html.escape(record['name']) + '.</p><p>' + messages[record['response']]
-                + '</p><div class="notice">' + html.escape(record['event']['title']) + '<br>'
-                + html.escape(when.strftime('%A, %d %B %Y, %H:%M') + ' (' + record['event']['timezone'] + ')') + '<br>'
-                + html.escape(record['event']['location']) + '</div><p>You can return to your invitation to update your response. The organizer will email the final details separately.</p>'
+    count, total = len(record['answers']), len(record['poll']['slots'])
+    message = f'Your availability is saved for {count} of {total} options.'
+    message += ' Please return to answer the remaining options.' if count < total else ' The organizer will email the final time once everyone can attend.'
+    link = record['site_url'] + '#' + urlencode(dict(token=token))
+    return page('Response saved.', '<p>Thank you, ' + html.escape(record['name']) + '.</p><p>' + message
+                + '</p><p>You can use your personal link to update your availability until the time is finalized.</p>'
                 + '<a class="primary" href="' + html.escape(link, quote=True) + '">Return to the seminar ↗</a>')
 
 
@@ -186,7 +260,7 @@ class Handler(BaseHTTPRequestHandler):
         elif route == '/config.json':
             self.reply(200, self.server.config)
         else:
-            files = {'/':'index.html','/index.html':'index.html','/styles.css':'styles.css','/app.js':'app.js'}
+            files = {'/':'index.html','/index.html':'index.html','/styles.css':'styles.css','/app.js':'app.js','/admin':'admin.html','/admin.js':'admin.js'}
             filename = files.get(route)
             if filename:
                 types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'}
@@ -218,6 +292,12 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('Invalid request.')
             if route == '/api/invitation':
                 self.reply(200, {'ok':True, **self.server.store.invitation(request.get('token'))})
+            elif route == '/api/calendar':
+                invitation = self.server.store.invitation(request.get('token'))
+                event = invitation['state'].get('final_event')
+                if not event:
+                    raise ValueError('The seminar time is not finalized yet.')
+                self.reply(200, seminar.calendar_bytes(event), 'text/calendar; charset=utf-8')
             elif route == '/api/admin':
                 secret = request.get('secret')
                 if not isinstance(secret, str) or not hmac.compare_digest(secret.encode(), self.server.admin_secret.encode()):
@@ -226,6 +306,11 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply(200, {'ok':True, 'count':self.server.store.sync(request.get('invites'))})
                 elif request.get('action') == 'responses':
                     self.reply(200, {'ok':True, 'records':self.server.store.responses()})
+                elif request.get('action') == 'dashboard':
+                    self.reply(200, {'ok':True, **self.server.store.dashboard()})
+                elif request.get('action') in ('propose', 'finalize'):
+                    state = self.server.store.select(request['action'], request.get('slot_id'), request.get('snapshot'))
+                    self.reply(200, {'ok':True, 'state':state})
                 else:
                     raise ValueError('Unknown admin action.')
             else:

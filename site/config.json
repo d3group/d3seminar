@@ -8,11 +8,28 @@
   "site_url": "https://d3group.github.io/d3seminar/",
   "backend_url": "",
   "test_mode": true,
+  "required_participants": 1,
+  "deadline": "2026-10-07T17:00:00+02:00",
   "slots": [
     {
       "id": "test-session",
       "start": "2026-10-09T14:00:00+02:00",
       "end": "2026-10-09T14:30:00+02:00"
+    },
+    {
+      "id": "monday-morning",
+      "start": "2026-10-12T10:00:00+02:00",
+      "end": "2026-10-12T10:30:00+02:00"
+    },
+    {
+      "id": "tuesday-afternoon",
+      "start": "2026-10-13T14:00:00+02:00",
+      "end": "2026-10-13T14:30:00+02:00"
+    },
+    {
+      "id": "wednesday-morning",
+      "start": "2026-10-14T11:00:00+02:00",
+      "end": "2026-10-14T11:30:00+02:00"
     }
   ]
 }

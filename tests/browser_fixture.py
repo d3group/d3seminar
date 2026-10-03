@@ -15,13 +15,12 @@ with tempfile.TemporaryDirectory() as directory:
     app = create_server(0, store=store, config=config, admin_secret='browser-test-only-' * 3)
     config['site_url'] = f'http://127.0.0.1:{app.server_address[1]}/'
     config['backend_url'] = config['site_url'] + 'api/respond'
-    event = seminar.event_data(config, config['slots'][0])
-    revision = seminar.event_revision(event)
+    poll = seminar.poll_data(config)
+    revision = seminar.event_revision(poll)
     token = 'T' * 43
     store.sync([dict(id='d'*24, name='Browser Test', email='browser-test@example.com',
-                     token_hash=seminar.digest(token), revision=revision, event=event, site_url=config['site_url'])])
-    print(json.dumps(dict(base=config['site_url'], invitation=config['site_url'] + '#' + urlencode(dict(
-        token=token, slot=event['slot_id'], name='Browser Test', revision=revision)))), flush=True)
+                     token_hash=seminar.digest(token), revision=revision, poll=poll, site_url=config['site_url'])])
+    print(json.dumps(dict(base=config['site_url'], invitation=config['site_url'] + '#' + urlencode(dict(token=token, slot='test-session', revision='legacy')), admin=config['site_url'] + 'admin#' + urlencode(dict(key=app.admin_secret)))), flush=True)
     try:
         app.serve_forever()
     except KeyboardInterrupt:

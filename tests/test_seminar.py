@@ -37,7 +37,7 @@ class SeminarTests(unittest.TestCase):
 
     def remote(self, invite, status='pending', updated=''):
         return dict(id=invite['id'], email=invite['email'], revision=invite['revision'],
-                    token_hash=seminar.digest(invite['token']), response=status, updated_at=updated, comment='')
+                    token_hash=seminar.digest(invite['token']), answers={slot['id']:'available' for slot in CONFIG['slots']} if status == 'confirmed' else {}, updated_at=updated, comment='')
 
     def args(self, kind='invite', send=False):
         return argparse.Namespace(kind=kind, send=send, to=ADDRESS, all=False)
@@ -49,7 +49,7 @@ class SeminarTests(unittest.TestCase):
         seminar.prepare(argparse.Namespace(csv=None))
         self.assertEqual(self.invites(), records)
 
-    def test_changed_time_rotates_token_and_clears_delivery_history(self):
+    def test_changed_time_preserves_personal_link_and_archives_old_invitation(self):
         before = self.invites()[0]
         config = copy.deepcopy(CONFIG)
         config['location'] = 'New room'
@@ -58,7 +58,8 @@ class SeminarTests(unittest.TestCase):
             seminar.load_invitations(config)
         seminar.prepare(argparse.Namespace(csv=None))
         after = self.invites()[0]
-        self.assertNotEqual(before['token'], after['token'])
+        self.assertEqual(before['token'], after['token'])
+        self.assertEqual(len(list((seminar.PRIVATE / 'history').glob('*.json'))), 1)
         self.assertNotEqual(before['revision'], after['revision'])
         self.assertEqual(after['deliveries'], {})
 
@@ -85,7 +86,7 @@ class SeminarTests(unittest.TestCase):
         self.assertIn('>Open your personal invitation</a>', html_body)
 
     def test_confirmation_has_calendar_attachment(self):
-        mail = seminar.message(CONFIG, seminar.settings(), self.invites()[0], 'confirm')
+        mail = seminar.message(CONFIG, seminar.settings(), self.invites()[0], 'confirm', {'final_event':seminar.event_data(CONFIG, CONFIG['slots'][0])})
         attachments = list(mail.iter_attachments())
         self.assertEqual(attachments[0].get_filename(), 'd3-seminar.ics')
         self.assertIn(b'STATUS:CONFIRMED', attachments[0].get_payload(decode=True))
@@ -101,7 +102,7 @@ class SeminarTests(unittest.TestCase):
     def test_send_is_individual_and_not_repeated(self):
         invite = self.invites()[0]
         smtp = MagicMock()
-        with patch.object(seminar, 'backend', return_value={'records': [self.remote(invite)]}), \
+        with patch.object(seminar, 'backend', return_value={'records': [self.remote(invite)], 'state':{}}), \
              patch.object(seminar.getpass, 'getpass', return_value='test-password'), \
              patch.object(seminar.smtplib, 'SMTP_SSL', return_value=smtp):
             seminar.send(self.args(send=True))
@@ -110,20 +111,20 @@ class SeminarTests(unittest.TestCase):
         client.login.assert_called_once_with('jmu-user', 'test-password')
         client.send_message.assert_called_once()
         self.assertEqual(client.send_message.call_args.kwargs['to_addrs'], [ADDRESS])
-        self.assertEqual(self.invites()[0]['deliveries']['invite']['status'], 'sent')
+        self.assertEqual(self.invites()[0]['deliveries']['invite:' + invite['revision']]['status'], 'sent')
 
     def test_ambiguous_smtp_failure_is_not_retried_automatically(self):
         invite = self.invites()[0]
         smtp = MagicMock()
         smtp.__enter__.return_value.send_message.side_effect = OSError('connection lost')
-        with patch.object(seminar, 'backend', return_value={'records': [self.remote(invite)]}), \
+        with patch.object(seminar, 'backend', return_value={'records': [self.remote(invite)], 'state':{}}), \
              patch.object(seminar.getpass, 'getpass', return_value='test-password'), \
              patch.object(seminar.smtplib, 'SMTP_SSL', return_value=smtp):
             with self.assertRaises(OSError):
                 seminar.send(self.args(send=True))
             seminar.send(self.args(send=True))
         smtp.__enter__.return_value.send_message.assert_called_once()
-        self.assertEqual(self.invites()[0]['deliveries']['invite']['status'], 'attempted')
+        self.assertEqual(self.invites()[0]['deliveries']['invite:' + invite['revision']]['status'], 'attempted')
 
     def test_remote_mismatch_blocks_mail_before_smtp(self):
         with patch.object(seminar, 'backend', return_value={'records': []}), \
@@ -135,11 +136,48 @@ class SeminarTests(unittest.TestCase):
     def test_reminder_and_confirmation_target_correct_states(self):
         invite = self.invites()[0]
         self.assertFalse(seminar.eligible(invite, self.remote(invite), 'remind'))
-        invite['deliveries']['invite'] = {'status': 'sent'}
-        self.assertEqual(seminar.eligible(invite, self.remote(invite), 'remind'), 'remind')
+        invite['deliveries']['invite:' + invite['revision']] = {'status': 'sent'}
+        self.assertEqual(seminar.eligible(invite, self.remote(invite), 'remind'), 'remind:' + invite['revision'])
         self.assertFalse(seminar.eligible(invite, self.remote(invite, 'confirmed'), 'remind'))
         self.assertFalse(seminar.eligible(invite, self.remote(invite), 'confirm'))
-        self.assertEqual(seminar.eligible(invite, self.remote(invite, 'confirmed', 'today'), 'confirm'), 'confirm:today')
+        state = dict(final_event=seminar.event_data(CONFIG, CONFIG['slots'][0]), finalized_at='today')
+        self.assertEqual(seminar.eligible(invite, self.remote(invite, 'confirmed'), 'confirm', state), 'confirm:today')
+        self.assertFalse(seminar.eligible(invite, self.remote(invite), 'invite', state))
+
+    def test_reconfirmation_mail_targets_only_conditional_attendees(self):
+        invite = self.invites()[0]
+        slot_id = CONFIG['slots'][0]['id']
+        state = dict(proposed_slot_id=slot_id, proposal_id='round-one')
+        for answer in ('available', 'unavailable', None):
+            response = dict(answers={slot_id:answer} if answer else {})
+            self.assertFalse(seminar.eligible(invite, response, 'check', state))
+        response = dict(answers={slot_id:'if_needed'})
+        self.assertEqual(seminar.eligible(invite, response, 'check', state), 'check:round-one')
+        invite['deliveries']['check:round-one'] = dict(status='sent')
+        self.assertFalse(seminar.eligible(invite, response, 'check', state))
+        mail = seminar.message(CONFIG, seminar.settings(), invite, 'check', state)
+        body = mail.get_body(preferencelist=('plain',)).get_content()
+        self.assertIn('change it to Available', body)
+        self.assertIn('Friday, 09 October', body)
+        self.assertNotIn('Monday, 12 October', body)
+        self.assertEqual(list(mail.iter_attachments()), [])
+
+    def test_calendar_cannot_be_sent_before_finalization(self):
+        with self.assertRaisesRegex(ValueError, 'Finalize'):
+            seminar.message(CONFIG, seminar.settings(), self.invites()[0], 'confirm')
+
+    def test_response_arriving_during_password_prompt_skips_reminder(self):
+        invite = self.invites()[0]
+        invite['deliveries']['invite:' + invite['revision']] = dict(status='sent')
+        seminar.save_private(seminar.PRIVATE / 'invitations.json', [invite])
+        pending = {invite['id']:self.remote(invite)}
+        done = {invite['id']:self.remote(invite, 'confirmed')}
+        with patch.object(seminar, 'get_responses', side_effect=[pending, done]), \
+             patch.object(seminar, 'backend', return_value={'state':{}}), \
+             patch.object(seminar.getpass, 'getpass', return_value='test-password'), \
+             patch.object(seminar.smtplib, 'SMTP_SSL') as smtp:
+            seminar.send(self.args(kind='remind', send=True))
+        smtp.return_value.__enter__.return_value.send_message.assert_not_called()
 
     def test_backend_cannot_send_admin_secret_to_another_host(self):
         local = seminar.settings()
