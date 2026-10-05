@@ -20,6 +20,11 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_*.py'
           node --check site/app.js
           node --check site/admin.js
+          node --check site/home.js
+          node --check site/about.js
+          node --check site/agenda.js
+          node --check site/shared.js
+          node --test tests/programme.mjs
   deploy:
     if: github.event_name == 'workflow_dispatch'
     needs: test

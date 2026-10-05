@@ -10,11 +10,13 @@ import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import seminar
+import presentations
+from organizer import Organizer, write_config
 
-ANSWERS = {'available', 'if_needed', 'unavailable'}
+ANSWERS = {'available', 'unavailable'}
 
 
 class Store:
@@ -25,7 +27,23 @@ class Store:
             connection.execute('CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL, data TEXT NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS poll_state (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS history (saved_at TEXT NOT NULL, data TEXT NOT NULL)')
+            connection.execute('CREATE TABLE IF NOT EXISTS presentations (participant_id TEXT PRIMARY KEY, data TEXT NOT NULL)')
+            connection.execute('CREATE TABLE IF NOT EXISTS presentation_files (id TEXT PRIMARY KEY, participant_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, content BLOB NOT NULL, UNIQUE(participant_id, kind))')
         self.database.chmod(0o600)
+        self.retire_conditional_answers()
+
+    def retire_conditional_answers(self):
+        with self.connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            records, state = self.records(connection), self.state(connection)
+            affected = [record for record in records if 'if_needed' in record.get('answers', {}).values()]
+            if not affected and not any(key in state for key in ('proposed_slot_id', 'proposal_id')):
+                return
+            connection.execute('INSERT INTO history VALUES (?, ?)', (seminar.now(), json.dumps(dict(records=records, state=state))))
+            for record in affected:
+                record['answers'] = {key:value for key,value in record['answers'].items() if value != 'if_needed'}
+                connection.execute('UPDATE invitations SET data=? WHERE id=?', (json.dumps(record), record['id']))
+            self.write_state(connection, {key:value for key,value in state.items() if key not in ('proposed_slot_id', 'proposal_id')})
 
     @contextmanager
     def connect(self):
@@ -68,6 +86,7 @@ class Store:
             raise ValueError('Provide 1–100 invitations.')
         for invite in invites:
             self.validate(invite)
+        seminar.validate_roles(invites)
         for field in ('id', 'email', 'token_hash'):
             if len({item[field] for item in invites}) != len(invites):
                 raise ValueError('Duplicate ' + field + '.')
@@ -85,7 +104,7 @@ class Store:
             if changed:
                 if existing:
                     connection.execute('INSERT INTO history VALUES (?, ?)', (seminar.now(), json.dumps(dict(records=list(existing.values()), state=state))))
-                self.write_state(connection, {})
+                self.write_state(connection, {key:value for key,value in state.items() if key.startswith('programme')})
             current = set()
             for invite in invites:
                 current.add(invite['id'])
@@ -112,28 +131,39 @@ class Store:
             raise ValueError('The organizer is updating this invitation. Please try again shortly.')
         return record
 
-    def invitation(self, token):
+    def invitation(self, token, include_votes=False, include_presentations=False):
         with self.connect() as connection:
             connection.execute('BEGIN')
             record = self.lookup(connection, token)
             result = {key: record[key] for key in ('name', 'poll', 'revision', 'answers', 'comment', 'updated_at')}
-            result['state'] = self.state(connection)
+            result['state'] = seminar.programme_state(self.state(connection))
+            result['role'] = record.get('role', '')
+            result['presentation'] = presentations.own(connection, record['id']) if result['role'] in presentations.PRESENTER_ROLES else {}
+            if include_presentations:
+                result['presentations'] = presentations.listing(self, connection, record['id'])
+            if include_votes:
+                people = sorted(self.records(connection), key=lambda person: (person['name'].casefold(), person['id']))
+                result['participants'] = [dict(name=person['name'], role=person.get('role', ''), answers=person['answers']) for person in people
+                                          if person['active'] and person.get('revision') == record['revision'] and 'poll' in person]
             return result
 
     def respond(self, params):
-        comment = params.get('comment', '')
-        if not isinstance(comment, str) or len(comment) > 1000:
-            raise ValueError('Please keep your note under 1,000 characters.')
+        partial = params.get('partial', 'false')
+        if partial not in ('true', 'false'):
+            raise ValueError('Invalid response mode.')
         with self.connect() as connection:
             connection.execute('BEGIN IMMEDIATE')
             record = self.lookup(connection, params.get('token'))
+            comment = record['comment'] if partial == 'true' else params.get('comment', '')
+            if not isinstance(comment, str) or len(comment) > 1000:
+                raise ValueError('Please keep your note under 1,000 characters.')
             if params.get('revision') != record['revision']:
                 raise ValueError('The candidate times have changed. Reopen your invitation and check all options again.')
             state = self.state(connection)
             if state.get('final_event'):
                 raise ValueError('The seminar time is finalized. Please contact Aabhash if your availability has changed.')
             ids = {slot['id'] for slot in record['poll']['slots']}
-            answers = {}
+            answers = dict(record['answers']) if partial == 'true' else {}
             for key, value in params.items():
                 if key.startswith('answer:'):
                     slot_id = key[7:]
@@ -141,11 +171,11 @@ class Store:
                         raise ValueError('Invalid availability option.')
                     if value:
                         answers[slot_id] = value
+                    else:
+                        answers.pop(slot_id, None)
             if record['answers'] != answers or record['comment'] != comment.strip() or not record['updated_at']:
                 record.update(answers=answers, comment=comment.strip(), updated_at=datetime.now(timezone.utc).isoformat())
                 connection.execute('UPDATE invitations SET data=? WHERE id=?', (json.dumps(record), record['id']))
-                if state.get('proposed_slot_id') and answers.get(state['proposed_slot_id']) not in {'available', 'if_needed'}:
-                    self.write_state(connection, {})
         return record
 
     def responses(self):
@@ -159,7 +189,7 @@ class Store:
                 conn.execute('BEGIN')
                 return self.dashboard(conn)
         records = [r for r in self.records(connection) if r['active'] and 'poll' in r]
-        state = self.state(connection)
+        state = seminar.programme_state(self.state(connection))
         poll = records[0]['poll'] if records else None
         slots = []
         required = poll['required_participants'] if poll else 0
@@ -167,9 +197,8 @@ class Store:
             counts = {value: sum(r['answers'].get(slot['id']) == value for r in records) for value in ANSWERS}
             counts['unknown'] = max(required, len(records)) - sum(counts.values())
             ready = len(records) == required and counts['available'] == required
-            can_propose = len(records) == required and not counts['unknown'] and not counts['unavailable'] and counts['if_needed'] > 0
-            slots.append(dict(slot, **counts, ready=ready, can_propose=can_propose))
-        people = [dict(id=r['id'], name=r['name'], email=r['email'], answers=r['answers'], comment=r['comment'], updated_at=r['updated_at'],
+            slots.append(dict(slot, **counts, ready=ready))
+        people = [dict(id=r['id'], name=r['name'], role=r.get('role', ''), email=r['email'], answers=r['answers'], comment=r['comment'], updated_at=r['updated_at'],
                        complete=len(r['answers']) == len(poll['slots'])) for r in records]
         return dict(poll=poll, state=state, participants=people, slots=slots, registered=len(records), required=required,
                     completed=sum(p['complete'] for p in people), snapshot=seminar.event_revision(dict(records=records, state=state)))
@@ -180,7 +209,7 @@ class Store:
             dashboard = self.dashboard(connection)
             if dashboard['snapshot'] != snapshot:
                 raise ValueError('Responses changed. Refresh the dashboard and check the latest availability.')
-            state = dashboard['state']
+            state = self.state(connection)
             if state.get('final_event'):
                 raise ValueError('This seminar is already finalized.')
             slot = next((s for s in dashboard['slots'] if s['id'] == slot_id), None)
@@ -190,11 +219,6 @@ class Store:
                 if not slot['ready']:
                     raise ValueError('Everyone in the required group must mark this time Available before it can be finalized.')
                 state.update(final_event=seminar.event_data(dashboard['poll'], slot), finalized_at=datetime.now(timezone.utc).isoformat())
-            elif action == 'propose':
-                if not slot['can_propose']:
-                    raise ValueError('A reconfirmation needs responses from everyone and no Unavailable responses for this time.')
-                if state.get('proposed_slot_id') != slot_id:
-                    state.update(proposed_slot_id=slot_id, proposal_id=datetime.now(timezone.utc).isoformat())
             else:
                 raise ValueError('Unknown selection action.')
             self.write_state(connection, state)
@@ -204,18 +228,20 @@ class Store:
 def page(title, body):
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             '<meta name="referrer" content="same-origin"><title>' + html.escape(title) + ' · D3 Seminar</title>'
-            '<link rel="stylesheet" href="/styles.css"></head><body><main class="receipt-page">'
-            '<span class="eyebrow">D3 / RESEARCH SEMINAR</span><h1>' + html.escape(title) + '</h1>' + body + '</main></body></html>')
+            '<link rel="stylesheet" href="/styles.css"></head><body><header class="masthead">'
+            '<img class="university-logo" src="/assets/uni-wuerzburg.svg" width="347" height="152" alt="Julius-Maximilians-Universität Würzburg">'
+            '<img class="d3-logo" src="/assets/d3.svg" width="241" height="48" alt="D3 · Data Driven Decisions">'
+            '</header><main class="receipt-page"><h1>' + html.escape(title) + '</h1>' + body + '</main></body></html>')
 
 
 def receipt(record, token):
     count, total = len(record['answers']), len(record['poll']['slots'])
     message = f'Your availability is saved for {count} of {total} options.'
     message += ' Please return to answer the remaining options.' if count < total else ' The organizer will email the final time once everyone can attend.'
-    link = record['site_url'] + '#' + urlencode(dict(token=token))
+    link = record['site_url'] + 'event.html?' + urlencode(dict(event=record.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(token=token))
     return page('Response saved.', '<p>Thank you, ' + html.escape(record['name']) + '.</p><p>' + message
                 + '</p><p>You can use your personal link to update your availability until the time is finalized.</p>'
-                + '<a class="primary" href="' + html.escape(link, quote=True) + '">Return to the seminar ↗</a>')
+                + '<a class="primary" href="' + html.escape(link, quote=True) + '">Return to the seminar</a>')
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -225,17 +251,19 @@ class Handler(BaseHTTPRequestHandler):
         # Invitation tokens and participant responses must never appear in access logs.
         pass
 
-    def reply(self, status, data, content_type='application/json'):
+    def reply(self, status, data, content_type='application/json', policy=None, disposition=None):
         body = (json.dumps(data) if content_type == 'application/json' else data)
         body = body.encode() if isinstance(body, str) else body
         self.send_response(status)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
-        self.send_header('Referrer-Policy', 'same-origin')
+        self.send_header('Referrer-Policy', 'no-referrer' if policy else 'same-origin')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('X-Frame-Options', 'DENY')
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+        self.send_header('Content-Security-Policy', policy or "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+        if disposition:
+            self.send_header('Content-Disposition', disposition)
         self.end_headers()
         self.wfile.write(body)
 
@@ -251,6 +279,12 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def event_store(self, request):
+        event_id = request.get('event_id', 'seminar-1')
+        if not isinstance(event_id, str) or event_id not in self.server.stores:
+            raise ValueError('Unknown event.')
+        return self.server.stores[event_id]
+
     def do_GET(self):
         if not self.trusted_request():
             return
@@ -260,10 +294,15 @@ class Handler(BaseHTTPRequestHandler):
         elif route == '/config.json':
             self.reply(200, self.server.config)
         else:
-            files = {'/':'index.html','/index.html':'index.html','/styles.css':'styles.css','/app.js':'app.js','/admin':'admin.html','/admin.js':'admin.js'}
+            files = {'/':'index.html','/index.html':'index.html','/event.html':'event.html', '/home.js':'home.js', '/shared.js':'shared.js',
+                     '/about.html':'about.html','/about.js':'about.js',
+                     '/agenda.html':'agenda.html','/agenda.js':'agenda.js',
+                     '/styles.css':'styles.css','/app.js':'app.js','/admin':'admin.html','/admin.js':'admin.js',
+                     '/assets/d3.svg':'assets/d3.svg','/assets/uni-wuerzburg.svg':'assets/uni-wuerzburg.svg',
+                     '/assets/agenda-paper.svg':'assets/agenda-paper.svg'}
             filename = files.get(route)
             if filename:
-                types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'}
+                types = {'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml'}
                 self.reply(200, (seminar.ROOT / 'site' / filename).read_bytes(), types[Path(filename).suffix])
             else:
                 self.reply(404, {'ok':False, 'error':'Not found.'})
@@ -273,27 +312,57 @@ class Handler(BaseHTTPRequestHandler):
             return
         route = urlparse(self.path).path
         is_form = route == '/api/respond'
+        wants_json = 'application/json' in self.headers.get('Accept', '')
         try:
             size = int(self.headers.get('Content-Length', '0'))
-            if not 0 < size <= 150000:
+            limit = presentations.MAX_FILE_SIZE if route == '/api/presentation-upload' else 150000
+            if not 0 < size <= limit:
                 raise ValueError('Request is empty or too large.')
+            if route == '/api/presentation-upload':
+                store = self.event_store(dict(event_id=self.headers.get('X-Event-Id')))
+                result = presentations.upload(store, self.headers.get('X-Invitation-Token'), self.headers.get('X-Material-Kind'),
+                    unquote(self.headers.get('X-File-Name', '')), self.rfile.read(size), self.headers.get('X-Presentation-Version', ''))
+                self.reply(200, dict(ok=True, presentation=result))
+                return
             data = self.rfile.read(size).decode('utf-8')
+            if route == '/api/material':
+                if self.headers.get_content_type() != 'application/x-www-form-urlencoded':
+                    raise ValueError('Open the material from the Agenda page.')
+                params = {key:values[0] for key,values in parse_qs(data).items()}
+                material = presentations.material(self.event_store(params), params.get('token'), params.get('file_id'))
+                inline = material['mime'].startswith('text/html')
+                self.reply(200, material['content'], material['mime'], policy=presentations.MATERIAL_POLICY,
+                           disposition=('inline' if inline else 'attachment') + "; filename*=UTF-8''" + quote(material['name'], safe=''))
+                return
             if is_form:
                 if self.headers.get_content_type() != 'application/x-www-form-urlencoded':
                     raise ValueError('Use the seminar response form.')
                 params = {key: values[0] for key, values in parse_qs(data, keep_blank_values=True).items()}
-                record = self.server.store.respond(params)
-                self.reply(200, receipt(record, params['token']), 'text/html; charset=utf-8')
+                record = self.event_store(params).respond(params)
+                if wants_json:
+                    result = self.event_store(params).invitation(params['token'], include_votes=True) if params.get('partial') == 'true' else {key:record[key] for key in ('answers', 'comment', 'updated_at')}
+                    self.reply(200, dict(ok=True, **result))
+                else:
+                    self.reply(200, receipt(record, params['token']), 'text/html; charset=utf-8')
                 return
             if self.headers.get_content_type() != 'application/json':
                 raise ValueError('JSON is required.')
             request = json.loads(data)
             if not isinstance(request, dict):
                 raise ValueError('Invalid request.')
-            if route == '/api/invitation':
-                self.reply(200, {'ok':True, **self.server.store.invitation(request.get('token'))})
+            store = self.event_store(request)
+            if route == '/api/public-presentations':
+                with store.connect() as connection:
+                    connection.execute('BEGIN')
+                    self.reply(200, dict(ok=True, presentations=presentations.listing(store, connection)))
+            elif route == '/api/invitation':
+                self.reply(200, {'ok':True, **store.invitation(request.get('token'), include_votes=request.get('include_votes') is True,
+                                                            include_presentations=request.get('include_presentations') is True)})
+            elif route == '/api/presentation':
+                result = presentations.save(store, request.get('token'), request.get('presentation'), request.get('version', ''), remove=request.get('remove') is True)
+                self.reply(200, dict(ok=True, presentation=result))
             elif route == '/api/calendar':
-                invitation = self.server.store.invitation(request.get('token'))
+                invitation = store.invitation(request.get('token'))
                 event = invitation['state'].get('final_event')
                 if not event:
                     raise ValueError('The seminar time is not finalized yet.')
@@ -303,41 +372,66 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(secret, str) or not hmac.compare_digest(secret.encode(), self.server.admin_secret.encode()):
                     self.reply(403, {'ok':False, 'error':'Unauthorized.'})
                 elif request.get('action') == 'sync':
-                    self.reply(200, {'ok':True, 'count':self.server.store.sync(request.get('invites'))})
+                    self.reply(200, {'ok':True, 'count':store.sync(request.get('invites'))})
                 elif request.get('action') == 'responses':
-                    self.reply(200, {'ok':True, 'records':self.server.store.responses()})
+                    self.reply(200, {'ok':True, 'records':store.responses()})
                 elif request.get('action') == 'dashboard':
-                    self.reply(200, {'ok':True, **self.server.store.dashboard()})
-                elif request.get('action') in ('propose', 'finalize'):
-                    state = self.server.store.select(request['action'], request.get('slot_id'), request.get('snapshot'))
+                    self.reply(200, {'ok':True, **store.dashboard()})
+                elif request.get('action') == 'finalize':
+                    with self.server.organizer.lock():
+                        state = store.select(request['action'], request.get('slot_id'), request.get('snapshot'))
                     self.reply(200, {'ok':True, 'state':state})
+                elif request.get('action') == 'preview_schedule':
+                    self.reply(200, dict(ok=True, **self.server.organizer.preview_schedule(request['event_id'], request['proposal'])))
+                elif request.get('action') == 'save_schedule':
+                    result = self.server.organizer.save_schedule(request['event_id'], request['proposal'], request['preview'], request.get('confirm_reset'))
+                    self.reply(200, dict(ok=True, **result))
+                elif request.get('action') == 'save_programme':
+                    self.server.organizer.save_programme(request['event_id'], request['programme'], request['snapshot'])
+                    self.reply(200, dict(ok=True))
+                elif request.get('action') == 'preview_mail':
+                    self.reply(200, dict(ok=True, **self.server.organizer.preview_mail(request['event_id'], request['kind'])))
+                elif request.get('action') == 'send_mail':
+                    result = self.server.organizer.send_mail(request['event_id'], request['kind'], request['preview'], request.get('password'))
+                    self.reply(503 if result.get('error') else 200, dict(ok=not bool(result.get('error')), **result))
                 else:
                     raise ValueError('Unknown admin action.')
             else:
                 self.reply(404, {'ok':False, 'error':'Not found.'})
         except (ValueError, KeyError, TypeError) as error:
             message = str(error) if isinstance(error, ValueError) else 'Invalid request.'
-            if is_form:
+            if is_form and not wants_json:
                 self.reply(400, page('Response not saved.', '<p>' + html.escape(message) + '</p><p>Return to your email invitation and try again.</p>'), 'text/html; charset=utf-8')
             else:
                 self.reply(400, {'ok':False, 'error':message})
         except sqlite3.Error:
             self.reply(503, {'ok':False, 'error':'Response storage is unavailable. Please try again.'})
+        except OSError:
+            self.reply(503, {'ok':False, 'error':'The event files could not be read or saved. Check the local setup and restart the server before retrying.'})
 
 
-def create_server(port=8765, store=None, config=None, admin_secret=None):
+def create_server(port=8765, store=None, config=None, admin_secret=None, config_file=None):
     config = config or seminar.load_config()
     server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
     server.store = store or Store(seminar.PRIVATE / 'responses.sqlite3')
+    server.stores = {'seminar-1': server.store}
+    for event in config.get('events', []):
+        seminar.event_config(config, event['id'])
+        if event['id'] != 'seminar-1':
+            server.stores[event['id']] = Store(server.store.database.parent / 'events' / event['id'] / 'responses.sqlite3')
     server.config = config
     server.admin_secret = admin_secret or seminar.settings()['admin_secret']
+    config_file = config_file or (store.database.parent / 'config.json' if store else seminar.CONFIG)
+    if not config_file.exists():
+        write_config(config_file, config)
+    server.organizer = Organizer(config, server.stores, config_file, server.store.database.parent)
     return server
 
 
 if __name__ == '__main__':
     server = create_server()
     print('D3 seminar is running at http://127.0.0.1:8765/', flush=True)
-    print('Private responses are stored in .private/responses.sqlite3. Press Ctrl+C to stop.', flush=True)
+    print('Responses for each event are stored privately under .private/. Press Ctrl+C to stop.', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

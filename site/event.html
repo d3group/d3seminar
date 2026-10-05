@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="same-origin">
+  <meta name="description" content="Find a shared time for this D3 event in winter semester 2026/27.">
+  <meta name="theme-color" content="#ffffff">
+  <title>D3 Research Seminar</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="masthead">
+    <a class="university-brand" href="https://www.uni-wuerzburg.de/" aria-label="University of Würzburg"><img class="university-logo" src="assets/uni-wuerzburg.svg" width="347" height="152" alt="Julius-Maximilians-Universität Würzburg"></a>
+    <nav class="programme-tabs" aria-label="Main navigation">
+      <a href="./" data-invitation-link aria-current="page">Programme</a>
+      <a href="agenda.html" data-invitation-link>Agenda</a>
+      <a href="about.html" data-invitation-link>About</a>
+    </nav>
+    <a class="brand" href="./" data-invitation-link aria-label="D3 programme home"><img class="d3-logo" src="assets/d3.svg" width="241" height="48" alt="D3 · Data Driven Decisions"></a>
+  </header>
+  <main>
+    <nav class="event-navigation" aria-label="Programme"><a class="back-home" id="back-home" href="./">All four events</a><span id="event-position"></span></nav>
+    <div class="saved-response event-saved-response" id="saved-response" role="status" hidden></div>
+    <section class="intro-grid">
+      <div class="intro">
+        <p class="eyebrow" id="event-semester">Winter semester 2026/27</p>
+        <h1 id="event-title">Seminar 1</h1>
+        <p class="intro-copy" id="event-description">Enter your availability for this event.</p>
+        <section class="response-journey" id="response-journey" aria-label="Your programme progress" hidden>
+          <p id="journey-progress" aria-live="polite"></p>
+          <ol id="journey-events"></ol>
+          <a id="continue-link" class="text-link" hidden></a>
+        </section>
+      </div>
+      <section class="response-card" aria-labelledby="card-title">
+        <div class="card-top"><span class="eyebrow">Availability</span><span class="status-pill" id="status-pill">Preview</span></div>
+        <h2 id="card-title">Select your availability</h2>
+        <p class="card-intro" id="greeting">Mark each option below.</p>
+        <p class="poll-meta" id="poll-meta"></p>
+        <p class="poll-deadline" id="poll-deadline"></p>
+        <div class="session" id="final-session" hidden><div><h3>Our event time is confirmed.</h3><p id="final-time"></p><p class="venue" id="session-location"></p></div></div>
+        <section class="event-programme" id="final-programme" aria-label="Event programme" hidden></section>
+        <p id="notice" class="notice" role="status" aria-live="polite">Loading…</p>
+        <form id="response-form" method="post" hidden>
+          <input type="hidden" name="event_id" id="event-id">
+          <input type="hidden" name="token" id="token">
+          <input type="hidden" name="revision" id="revision">
+          <p class="poll-help" id="poll-help">Mark each option Available or Unavailable. Leave it blank if you have not decided yet.</p>
+          <div class="bulk-actions"><button class="text-button" type="button" id="all-available">All times work</button><button class="text-button" type="button" id="all-unavailable">None of these work</button></div>
+          <div id="poll-options"></div>
+          <p class="answer-progress" id="answer-progress" aria-live="polite"></p>
+          <label class="notes-label" for="comment">A note for the organizer <span id="comment-hint">(optional)</span></label>
+          <textarea id="comment" name="comment" rows="3" maxlength="1000" placeholder="If no option works, suggest other days or times…"></textarea>
+          <div class="save-actions">
+            <button class="primary" id="submit-button" type="submit" value="continue">Save my availability</button>
+            <button class="text-button" id="save-later" type="submit" value="stay">Save for later</button>
+          </div>
+          <p class="privacy">Your name and availability are visible to invited participants. Notes are only visible to the organizers. Keep your personal link private. You can update your answers until the time is finalized.</p>
+        </form>
+        <div id="preview-actions" hidden><button class="primary" id="demo-button" type="button">Try the availability poll</button><p class="privacy">A preview only. No response will be stored.</p></div>
+        <div id="demo-receipt" hidden><h3>Preview complete.</h3><p>This was a demo. Nothing was sent or saved.</p><button class="secondary" id="demo-reset" type="button">Try the poll again</button></div>
+        <button class="calendar-link" id="calendar" type="button" hidden>Add confirmed time to calendar</button>
+      </section>
+    </section>
+
+  </main>
+  <footer>
+    <span>D3 · University of Würzburg</span>
+    <p class="footer-feedback">Send comments and suggestions to <a href="mailto:aabhash.dhakal@uni-wuerzburg.de?subject=D3%20seminar%20feedback">Aabhash</a>.</p>
+  </footer>
+  <noscript><p class="notice">Please enable JavaScript to open your personal invitation, or reply to the invitation email.</p></noscript>
+</body>
+</html>

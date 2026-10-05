@@ -16,7 +16,7 @@ import smtplib
 import ssl
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
 from urllib.parse import urlencode, urlparse
@@ -26,7 +26,17 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE = ROOT / '.private'
 CONFIG = ROOT / 'site' / 'config.json'
+EVENT_ID = None
 EMAIL_PATTERN = r'[^\s@<>\r\n]+@[^\s@<>\r\n]+\.[^\s@<>\r\n]+'
+GROUP_SIZES = {'professor':5, 'student':15}
+
+
+def validate_roles(records):
+    if any(record.get('role', '') not in {'', *GROUP_SIZES} for record in records):
+        raise ValueError('Set each participant role to professor or student, or leave it blank until assigned.')
+    for role, count in GROUP_SIZES.items():
+        if sum(record.get('role') == role for record in records) > count:
+            raise ValueError(f'The roster has more than {count} participants with the role {role}.')
 
 
 def now():
@@ -57,8 +67,21 @@ def email_address(value):
 
 
 def event_data(config, slot):
-    return dict(campaign_id=config['campaign_id'], end=slot['end'], location=config['location'],
+    event = dict(campaign_id=config['campaign_id'], end=slot['end'], location=config['location'],
                 slot_id=slot['id'], start=slot['start'], timezone=config['timezone'], title=config['title'])
+    if config.get('daily_hours'):
+        event.update(daily_hours=config['daily_hours'], duration_days=config['duration_days'])
+    return event
+
+
+def programme_state(state):
+    if not state.get('final_event') or not state.get('programme'):
+        return state
+    programme = state['programme']
+    event = dict(state['final_event'], programme=programme)
+    if programme.get('room'):
+        event['location'] = programme['room']
+    return dict(state, final_event=event)
 
 
 def digest(value):
@@ -70,8 +93,29 @@ def event_revision(event):
 
 
 def poll_data(config):
-    return {key: config[key] for key in ('campaign_id', 'title', 'timezone', 'location', 'slots',
+    poll = {key: config[key] for key in ('campaign_id', 'title', 'timezone', 'location', 'slots',
                                         'deadline', 'required_participants')}
+    if config.get('duration_days'):
+        poll['duration_days'] = config['duration_days']
+    if config.get('daily_hours'):
+        poll['daily_hours'] = config['daily_hours']
+    return poll
+
+
+def event_config(config, event_id=None):
+    events = config.get('events', [{'id':'seminar-1', 'name':'Seminar 1'}])
+    ids = [event['id'] for event in events]
+    if len(set(ids)) != len(ids) or any(not re.fullmatch(r'[a-z0-9-]{1,40}', key) for key in ids):
+        raise ValueError('Give each event a unique id using lowercase letters, numbers, and hyphens.')
+    event = next((event for event in events if event['id'] == (event_id or ids[0])), None)
+    if not event:
+        raise ValueError('Unknown event.')
+    return dict(config, **{key:value for key,value in event.items() if key != 'id'}, event_id=event['id'])
+
+
+def event_private(config):
+    key = config.get('event_id', 'seminar-1')
+    return PRIVATE if key == 'seminar-1' else PRIVATE / 'events' / key
 
 
 def validate_poll(poll):
@@ -100,13 +144,49 @@ def validate_poll(poll):
             raise ValueError('Candidate times must be distinct, after the deadline, and include UTC offsets.')
         times.add(start)
         durations.add(end - start)
-    if len(durations) != 1:
+    if len(durations) != 1 and not poll.get('duration_days'):
         raise ValueError('Use the same duration for every candidate time.')
+    if poll.get('duration_days'):
+        if type(poll['duration_days']) is not int or not 1 <= poll['duration_days'] <= 14:
+            raise ValueError('Use a whole number of days for the onsite meeting.')
+        zone = ZoneInfo(poll['timezone'])
+        for slot in slots:
+            start, end = (datetime.fromisoformat(slot[key]).astimezone(zone) for key in ('start', 'end'))
+            if (end.date() - start.date()).days + 1 != poll['duration_days']:
+                raise ValueError('Each onsite option must cover the configured number of calendar days.')
+    if 'daily_hours' in poll:
+        hours = poll['daily_hours']
+        if not poll.get('duration_days') or not isinstance(hours, dict) or set(hours) not in ({'start', 'end'}, {'start', 'end', 'last_day_end'}):
+            raise ValueError('Daily hours require a multi-day event and a start and end time.')
+        if any(not isinstance(value, str) or not re.fullmatch(r'\d{2}:\d{2}', value) for value in hours.values()):
+            raise ValueError('Write daily hours as HH:MM.')
+        day_start, day_end = (time.fromisoformat(hours[key]) for key in ('start', 'end'))
+        if day_start >= day_end:
+            raise ValueError('Daily sessions must end after they start.')
+        last_end = time.fromisoformat(hours.get('last_day_end', hours['end']))
+        if 'last_day_end' in hours and (poll['duration_days'] < 2 or not day_start < last_end < day_end):
+            raise ValueError('The final day must be shorter than a full day and end after it starts.')
+        for slot in slots:
+            start, end = (datetime.fromisoformat(slot[key]).astimezone(ZoneInfo(poll['timezone'])) for key in ('start', 'end'))
+            if start.time() != day_start or end.time() != last_end:
+                raise ValueError('Each onsite option must match the configured daily hours.')
 
 
-def when(slot, timezone_name):
+def daily_hours_label(hours):
+    full = f'{hours["start"]}–{hours["end"]}'
+    if hours.get('last_day_end'):
+        return f'{full}; final day {hours["start"]}–{hours["last_day_end"]}'
+    return full + ' each day'
+
+
+def when(slot, timezone_name, daily_hours=None):
     start = datetime.fromisoformat(slot['start']).astimezone(ZoneInfo(timezone_name))
     end = datetime.fromisoformat(slot['end']).astimezone(ZoneInfo(timezone_name))
+    daily_hours = daily_hours or slot.get('daily_hours')
+    if daily_hours:
+        return f'{start:%A, %d %B %Y} to {end:%A, %d %B %Y}, {daily_hours_label(daily_hours)} ({timezone_name})'
+    if start.date() != end.date():
+        return f'{start:%A, %d %B %Y, %H:%M} to {end:%A, %d %B %Y, %H:%M} ({timezone_name})'
     return f'{start:%A, %d %B %Y}, {start:%H:%M}–{end:%H:%M} ({timezone_name})'
 
 
@@ -115,11 +195,28 @@ def calendar_bytes(event):
         return value.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     def escape(value):
         return value.replace('\\', '\\\\').replace('\r', '').replace('\n', '\\n').replace(',', '\\,').replace(';', '\\;')
-    lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//D3//Seminar//EN', 'BEGIN:VEVENT',
-             f'UID:{event["campaign_id"]}@d3seminar', f'DTSTAMP:{stamp(datetime.now(timezone.utc))}',
-             f'DTSTART:{stamp(datetime.fromisoformat(event["start"]))}', f'DTEND:{stamp(datetime.fromisoformat(event["end"]))}',
-             f'SUMMARY:{escape(event["title"])}', f'LOCATION:{escape(event["location"])}',
-             'STATUS:CONFIRMED', 'END:VEVENT', 'END:VCALENDAR', '']
+    sessions = [(event['campaign_id'], datetime.fromisoformat(event['start']), datetime.fromisoformat(event['end']), event['title'])]
+    if event.get('daily_hours'):
+        zone = ZoneInfo(event['timezone'])
+        first_day = datetime.fromisoformat(event['start']).astimezone(zone).date()
+        sessions = []
+        for index in range(event['duration_days']):
+            day = first_day + timedelta(days=index)
+            hours = event['daily_hours']
+            finish = hours.get('last_day_end', hours['end']) if index == event['duration_days'] - 1 else hours['end']
+            start, end = (datetime.combine(day, time.fromisoformat(value), tzinfo=zone) for value in (hours['start'], finish))
+            sessions.append((f'{event["campaign_id"]}-day-{index + 1}', start, end, f'{event["title"]} (day {index + 1})'))
+    lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//D3//Seminar//EN']
+    for uid, start, end, title in sessions:
+        lines.extend(['BEGIN:VEVENT', f'UID:{uid}@d3seminar', f'DTSTAMP:{stamp(datetime.now(timezone.utc))}',
+                      f'DTSTART:{stamp(start)}', f'DTEND:{stamp(end)}', f'SUMMARY:{escape(title)}',
+                      f'LOCATION:{escape(event["location"])}'])
+        programme = event.get('programme', {})
+        description = '\n'.join(programme[key] for key in ('topic', 'presenters', 'agenda') if programme.get(key))
+        if description:
+            lines.append('DESCRIPTION:' + escape(description))
+        lines.extend(['STATUS:CONFIRMED', 'END:VEVENT'])
+    lines.extend(['END:VCALENDAR', ''])
     # Fold by bytes so calendar applications also accept long Unicode titles.
     folded = []
     for line in lines:
@@ -134,7 +231,10 @@ def calendar_bytes(event):
 
 
 def load_config():
-    config = read_json(CONFIG)
+    programme = read_json(CONFIG)
+    for event in programme.get('events', []):
+        validate_poll(poll_data(event_config(programme, event['id'])))
+    config = event_config(programme, EVENT_ID)
     local_file = PRIVATE / 'settings.json'
     if local_file.exists():
         base = read_json(local_file).get('local_base_url')
@@ -170,9 +270,9 @@ def initialize(args):
         'local_base_url': 'http://127.0.0.1:8765/',
     })
     with (PRIVATE / 'participants.csv').open('w', newline='') as stream:
-        writer = csv.DictWriter(stream, fieldnames=['name', 'email'])
+        writer = csv.DictWriter(stream, fieldnames=['name', 'email', 'role'])
         writer.writeheader()
-        writer.writerow(dict(name=args.name, email=address))
+        writer.writerow(dict(name=args.name, email=address, role=getattr(args, 'role', '')))
     (PRIVATE / 'participants.csv').chmod(0o600)
     prepare(argparse.Namespace(csv=None))
     print('Created private settings and a participant list containing only your test address.')
@@ -190,14 +290,17 @@ def configure(args):
 
 def prepare(args):
     config, local = load_config(), settings()
+    directory = event_private(config)
     source = Path(args.csv) if args.csv else PRIVATE / 'participants.csv'
     with source.open(newline='') as stream:
         participants = list(csv.DictReader(stream))
     if not 1 <= len(participants) <= 100:
         raise ValueError('The participant list must contain 1–100 people.')
-    state_file = PRIVATE / 'invitations.json'
+    state_file = directory / 'invitations.json'
     previous = read_json(state_file) if state_file.exists() else []
     by_email = {record['email']: record for record in previous}
+    shared_file = PRIVATE / 'invitations.json'
+    shared = {r['email']:r for r in read_json(shared_file)} if shared_file.exists() else {}
     records, seen = [], set()
     for participant in participants:
         address = email_address(participant['email'])
@@ -212,18 +315,21 @@ def prepare(args):
         poll = poll_data(config)
         revision = event_revision(poll)
         old = by_email.get(address)
-        records.append(dict(id=old['id'] if old else secrets.token_hex(12), name=name, email=address,
-                            token=old['token'] if old else secrets.token_urlsafe(32),
+        identity = old or shared.get(address)
+        role = participant.get('role', (identity or {}).get('role', '')).strip().lower()
+        records.append(dict(id=identity['id'] if identity else secrets.token_hex(12), name=name, email=address, role=role,
+                            token=identity['token'] if identity else secrets.token_urlsafe(32),
                             revision=revision, poll=poll,
                             deliveries=old.get('deliveries', {}) if old else {}))
+    validate_roles(records)
     if previous and previous != records:
-        save_private(PRIVATE / 'history' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '-invitations.json'), previous)
+        save_private(directory / 'history' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '-invitations.json'), previous)
     save_private(state_file, records)
-    print(f'Prepared {len(records)} personal invitation(s). Nothing sent.')
+    print(f'{config.get("name", config["title"])}: prepared {len(records)} personal invitation(s). Nothing sent.')
 
 
 def load_invitations(config):
-    records = read_json(PRIVATE / 'invitations.json')
+    records = read_json(event_private(config) / 'invitations.json')
     for record in records:
         if record['revision'] != event_revision(poll_data(config)):
             raise ValueError('Seminar details changed. Run prepare, then sync before sending.')
@@ -235,7 +341,7 @@ def backend(config, action, **data):
     url = urlparse(base)
     if url.scheme != 'http' or url.hostname not in ('127.0.0.1', 'localhost') or url.path != '/':
         raise ValueError('Configure the local backend with configure --local first.')
-    payload = dict(action=action, secret=settings()['admin_secret'], **data)
+    payload = dict(action=action, event_id=config.get('event_id', 'seminar-1'), secret=settings()['admin_secret'], **data)
     request = Request(base + 'api/admin', data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
     with urlopen(request, timeout=40) as response:
         try:
@@ -250,7 +356,7 @@ def backend(config, action, **data):
 def synchronize(args):
     config = load_config()
     records = load_invitations(config)
-    invites = [dict(id=item['id'], name=item['name'], email=item['email'], poll=item['poll'],
+    invites = [dict(id=item['id'], name=item['name'], email=item['email'], role=item.get('role', ''), poll=item['poll'], event_id=config.get('event_id', 'seminar-1'),
                     revision=item['revision'], token_hash=digest(item['token']), site_url=config['site_url']) for item in records]
     result = backend(config, 'sync', invites=invites)
     print(f'Synchronized {result["count"]} invitation(s) to local SQLite. Existing responses to unchanged invitations are preserved.')
@@ -265,7 +371,7 @@ def get_responses(config, invitations):
         response = by_id.get(invite['id'])
         if not response or response['revision'] != invite['revision'] or response['token_hash'] != digest(invite['token']):
             raise ValueError('Local invitations and response storage differ. Run sync first.')
-    save_private(PRIVATE / 'responses.json', {'fetched_at': now(), 'records': responses})
+    save_private(event_private(config) / 'responses.json', {'fetched_at': now(), 'records': responses})
     return by_id
 
 
@@ -279,21 +385,21 @@ def status(args):
         print(f'{invite["name"]}: {count}/{len(config["slots"])} options answered')
         if response['comment']:
             print('  ' + response['comment'].replace('\n', '\n  '))
-    print('A private snapshot is saved in .private/responses.json.')
+    print('A private snapshot is saved in ' + str(event_private(config).relative_to(ROOT) / 'responses.json') + '.')
 
 
 def open_page(args):
     config = load_config()
     if args.command == 'admin':
-        url = config['site_url'] + 'admin#' + urlencode(dict(key=settings()['admin_secret']))
+        url = config['site_url'] + 'admin?' + urlencode(dict(event=config.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(key=settings()['admin_secret']))
     else:
         invite = next(item for item in load_invitations(config) if item['email'] == settings()['test_recipient'])
-        url = invitation_url(config, invite)
+        url = config['site_url'] + '#' + urlencode(dict(token=invite['token'])) if args.command == 'home' else invitation_url(config, invite)
     subprocess.run(['open', url], check=True)
 
 
 def invitation_url(config, invite):
-    return config['site_url'] + '#' + urlencode(dict(token=invite['token']))
+    return config['site_url'] + 'event.html?' + urlencode(dict(event=config.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(token=invite['token']))
 
 
 def message(config, local, invite, kind, state=None):
@@ -302,38 +408,49 @@ def message(config, local, invite, kind, state=None):
     wording = {
         'invite': ('Find a time for our seminar', 'Please mark your availability for each option. We are looking for one time when everyone can attend.'),
         'remind': ('Reminder: your seminar availability', 'Please finish marking your availability so we can find a time for everyone.'),
-        'check': ('Can you make this seminar time?', 'You marked this time as available if necessary. Please open your invitation and change it to Available if you can commit, or Unavailable if you cannot.'),
         'confirm': ('Our seminar time is confirmed', 'Everyone has confirmed their availability. Our seminar will take place at the time below.'),
     }
+    if kind not in wording:
+        raise ValueError('Choose invitations, reminders or final confirmations.')
     subject, introduction = wording[kind]
+    series = poll['title'] + (' · ' + config['semester'] if config.get('semester') else '')
+    if config.get('kind') == 'onsite':
+        subject = subject.replace('seminar', 'onsite meeting')
+        introduction = introduction.replace('seminar', 'onsite meeting')
+        if kind != 'confirm':
+            hours = poll.get('daily_hours')
+            timing = f', {daily_hours_label(hours)}' if hours else ''
+            introduction += f' Each option covers {poll["duration_days"]} consecutive dates{timing}. Please respond for the whole meeting.'
     if kind == 'confirm':
         event = state.get('final_event')
         if not event:
             raise ValueError('Finalize a time for everyone before sending confirmations.')
         details = when(event, poll['timezone'])
-    elif kind == 'check':
-        slot = next((item for item in poll['slots'] if item['id'] == state.get('proposed_slot_id')), None)
-        if not slot:
-            raise ValueError('Choose a time to reconfirm in the organizer dashboard first.')
-        details = when(slot, poll['timezone'])
+        programme = event.get('programme', {})
+        details += ''.join('\n' + programme[key] for key in ('topic', 'presenters', 'agenda') if programme.get(key))
     else:
-        details = '\n'.join(when(slot, poll['timezone']) for slot in poll['slots'])
+        details = '\n'.join(when(slot, poll['timezone'], poll.get('daily_hours')) for slot in poll['slots'])
     deadline = datetime.fromisoformat(poll['deadline']).astimezone(ZoneInfo(poll['timezone']))
     due = '' if kind == 'confirm' else f'Please respond by {deadline:%A, %d %B, %H:%M} ({poll["timezone"]}).\n\n'
     test_note = 'This is an MVP test sent only to you. All dates below are test options.\n\n' if config['test_mode'] else ''
-    body = (f'Hello {invite["name"]},\n\n{test_note}{introduction}\n\n{poll["title"]}\n{details}\n'
-            f'{poll["location"]}\n\n{due}Open your personal invitation:\n'
-            f'{invitation_url(config, invite)}\n\nPlease keep this link private; anyone with it can update your response.\n\n'
+    presentation_url = config['site_url'] + 'agenda.html?' + urlencode(dict(present=config.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(token=invite['token']))
+    presentation_note = ('Please add a talk title and abstract for at least one of the three seminars and for the onsite. '
+                         'You can add explainers and slides later.\nAdd your presentation:\n' + presentation_url + '\n\n') if invite.get('role') == 'student' else ''
+    body = (f'Hello {invite["name"]},\n\n{test_note}{introduction}\n\n{series}\n{details}\n'
+            f'{state["final_event"]["location"] if kind == "confirm" else poll["location"]}\n\n{due}Open your personal invitation:\n'
+            f'{invitation_url(config, invite)}\n\n{presentation_note}Please keep your personal links private; anyone with them can update your responses and presentations.\n\n'
             f'Best,\n{local["sender_name"]}\n\nPlease send any comments or suggestions to {local["sender_email"]}.\n')
     mail = EmailMessage()
     mail['From'] = formataddr((local['sender_name'], local['sender_email']))
     mail['To'] = invite['email']
-    mail['Subject'] = ('[TEST] ' if config['test_mode'] else '') + subject + ' | ' + poll['title']
+    mail['Subject'] = ('[TEST] ' if config['test_mode'] else '') + subject + ' | ' + series
     mail['Date'] = formatdate(localtime=True)
     mail['Message-ID'] = make_msgid(domain=local['sender_email'].split('@')[1])
     mail.set_content(body)
     safe_body = html.escape(body).replace(html.escape(invitation_url(config, invite)),
         '<a href="' + html.escape(invitation_url(config, invite), quote=True) + '">Open your personal invitation</a>')
+    if presentation_note:
+        safe_body = safe_body.replace(html.escape(presentation_url), '<a href="' + html.escape(presentation_url, quote=True) + '">Add your presentation</a>')
     paragraphs = ''.join('<p style="margin:0 0 18px">' + paragraph.replace('\n', '<br>') + '</p>'
                          for paragraph in safe_body.strip().split('\n\n'))
     mail.add_alternative('<html><body><div style="font:15px/1.7 Arial,sans-serif;max-width:600px;color:#152d35">'
@@ -344,9 +461,11 @@ def message(config, local, invite, kind, state=None):
 
 
 def eligible(invite, response, kind, state=None):
+    if kind not in {'invite', 'remind', 'confirm'}:
+        return False
     deliveries = invite.get('deliveries', {})
     state = state or {}
-    answers = response.get('answers', {}) if response else {}
+    answers = {key:value for key,value in (response or {}).get('answers', {}).items() if value in {'available', 'unavailable'}}
     revision = invite['revision']
     key = kind + ':' + revision
     if kind == 'confirm':
@@ -356,15 +475,10 @@ def eligible(invite, response, kind, state=None):
     else:
         if state.get('final_event'):
             return False
-        if kind == 'check':
-            if not state.get('proposal_id') or answers.get(state.get('proposed_slot_id')) != 'if_needed':
-                return False
-            key = 'check:' + state['proposal_id']
-        else:
-            if len(answers) == len(invite['poll']['slots']):
-                return False
-            if kind == 'remind' and deliveries.get('invite:' + revision, {}).get('status') != 'sent':
-                return False
+        if len(answers) == len(invite['poll']['slots']):
+            return False
+        if kind == 'remind' and deliveries.get('invite:' + revision, {}).get('status') != 'sent':
+            return False
     return key if key not in deliveries else False
 
 
@@ -383,8 +497,8 @@ def send(args):
     if not queue:
         print('No eligible messages. Already sent or attempted messages are not sent again.')
         return
-    preview_dir = PRIVATE / 'outbox'
-    preview_dir.mkdir(exist_ok=True, mode=0o700)
+    preview_dir = event_private(config) / 'outbox'
+    preview_dir.mkdir(exist_ok=True, parents=True, mode=0o700)
     messages = []
     for invite, key in queue:
         mail = message(config, local, invite, args.kind, state)
@@ -394,7 +508,7 @@ def send(args):
         messages.append((invite, key, mail))
         print(f'{"Send" if args.send else "Preview"}: {args.kind} → {invite["email"]}')
     if not args.send:
-        print('Email previews saved in .private/outbox/. Nothing sent. Add --send to deliver.')
+        print(f'Email previews saved in {preview_dir.relative_to(ROOT)}/. Nothing sent. Add --send to deliver.')
         return
     if not local['smtp_username']:
         raise ValueError('Set your JMU account username with configure --smtp-user first.')
@@ -412,10 +526,10 @@ def send(args):
                 continue
             # Persist before SMTP to prevent automatic duplicates after a crash or ambiguous timeout.
             invite['deliveries'][key] = dict(status='attempted', at=now(), message_id=mail['Message-ID'])
-            save_private(PRIVATE / 'invitations.json', invitations)
+            save_private(event_private(config) / 'invitations.json', invitations)
             smtp.send_message(mail, from_addr=local['sender_email'], to_addrs=[invite['email']])
             invite['deliveries'][key]['status'] = 'sent'
-            save_private(PRIVATE / 'invitations.json', invitations)
+            save_private(event_private(config) / 'invitations.json', invitations)
             print(f'Accepted by the university mail server: {invite["email"]}')
 
 
@@ -435,12 +549,15 @@ def test_mail(args):
 
 
 def main():
+    global EVENT_ID
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--event', default='seminar-1', help='Event id, or all for prepare, sync, and status')
     commands = parser.add_subparsers(dest='command', required=True)
     init = commands.add_parser('init', help='Create private settings and one test participant')
     init.add_argument('--email', required=True)
     init.add_argument('--name', required=True)
     init.add_argument('--smtp-user')
+    init.add_argument('--role', choices=['professor', 'student'], default='')
     init.set_defaults(run=initialize)
     config = commands.add_parser('configure')
     config.add_argument('--local', action='store_true', help='Use the backend at http://127.0.0.1:8765')
@@ -453,12 +570,13 @@ def main():
     commands.add_parser('status', help='Fetch current participant responses').set_defaults(run=status)
     commands.add_parser('admin', help='Open the private organizer dashboard').set_defaults(run=open_page)
     commands.add_parser('open-test', help='Open your personal test invitation').set_defaults(run=open_page)
+    commands.add_parser('home', help='Open your personal programme homepage').set_defaults(run=open_page)
     commands.add_parser('smtp-check', help='Test SMTP connectivity without sending').set_defaults(run=smtp_check)
     tester = commands.add_parser('test-mail', help='Send one test message to your configured test address')
-    tester.add_argument('kind', choices=['invite', 'remind', 'check', 'confirm'], nargs='?', default='invite')
+    tester.add_argument('kind', choices=['invite', 'remind', 'confirm'], nargs='?', default='invite')
     tester.set_defaults(run=test_mail)
     sender = commands.add_parser('send', help='Preview or send one invitation, reminder, or confirmation per person')
-    sender.add_argument('kind', choices=['invite', 'remind', 'check', 'confirm'])
+    sender.add_argument('kind', choices=['invite', 'remind', 'confirm'])
     target = sender.add_mutually_exclusive_group(required=True)
     target.add_argument('--to')
     target.add_argument('--all', action='store_true')
@@ -472,7 +590,15 @@ def main():
         except BlockingIOError:
             parser.exit(1, 'Another seminar command is running. Please wait.\n')
         try:
-            args.run(args)
+            if args.event == 'all':
+                if args.command not in {'prepare', 'sync', 'status'}:
+                    raise ValueError('Use --event all only with prepare, sync, or status.')
+                for event in read_json(CONFIG)['events']:
+                    EVENT_ID = event['id']
+                    args.run(args)
+            else:
+                EVENT_ID = args.event
+                args.run(args)
         except (ValueError, OSError, smtplib.SMTPException, KeyError) as error:
             parser.exit(1, f'Error: {error}\n')
 

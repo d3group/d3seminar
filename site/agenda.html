@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="same-origin"><meta name="theme-color" content="#ffffff">
+  <meta name="description" content="Topics, presenters and meeting plans for the D3 seminars and onsite meeting.">
+  <title>Agenda · D3 · WS 26/27</title>
+  <link rel="stylesheet" href="styles.css"><script type="module" src="agenda.js"></script>
+</head>
+<body>
+  <header class="masthead">
+    <a class="university-brand" href="https://www.uni-wuerzburg.de/" aria-label="University of Würzburg"><img class="university-logo" src="assets/uni-wuerzburg.svg" width="347" height="152" alt="Julius-Maximilians-Universität Würzburg"></a>
+    <nav class="programme-tabs" aria-label="Main navigation">
+      <a href="./" data-invitation-link>Programme</a>
+      <a href="agenda.html" data-invitation-link aria-current="page">Agenda</a>
+      <a href="about.html" data-invitation-link>About</a>
+    </nav>
+    <a class="brand" href="./" data-invitation-link aria-label="D3 programme home"><img class="d3-logo" src="assets/d3.svg" width="241" height="48" alt="D3 · Data Driven Decisions"></a>
+  </header>
+  <main class="programme-main">
+    <section class="programme-intro" aria-labelledby="agenda-title">
+      <h1 id="agenda-title">Agenda</h1>
+      <p class="lead">Research talks and our 2½-day onsite programme.</p>
+    </section>
+    <p class="notice" id="agenda-notice" role="status" aria-live="polite">Loading the agenda…</p>
+    <aside id="presentation-nudge" class="presentation-nudge" aria-label="Your presentations" hidden></aside>
+    <section id="presentation-editor" class="presentation-editor" aria-labelledby="editor-title" hidden>
+      <div class="editor-heading">
+        <h2 id="editor-title" tabindex="-1">Add your talk</h2>
+        <button id="close-editor" class="text-button" type="button">Back to agenda</button>
+      </div>
+      <p class="presentation-help">Start with a title. You can add the abstract and materials later.</p>
+      <form id="presentation-form">
+        <label for="presentation-event">Event</label>
+        <select id="presentation-event" name="event_id"></select>
+        <label for="talk-title">Talk title</label>
+        <input id="talk-title" name="title" maxlength="200" required>
+        <label for="talk-abstract">Abstract <span class="field-hint">(optional for now)</span></label>
+        <textarea id="talk-abstract" name="abstract" maxlength="5000" rows="4"></textarea>
+        <fieldset class="presentation-timing" aria-describedby="talk-duration-total">
+          <legend>Time for your talk <span class="field-hint">(optional for now)</span></legend>
+          <div class="timing-inputs">
+            <div>
+              <label for="presentation-minutes">Presentation (minutes)</label>
+              <input id="presentation-minutes" type="number" min="1" max="480" step="1" inputmode="numeric" placeholder="e.g. 20">
+            </div>
+            <div>
+              <label for="questions-minutes">Questions (minutes)</label>
+              <input id="questions-minutes" type="number" min="0" max="480" step="1" inputmode="numeric" placeholder="e.g. 10">
+            </div>
+          </div>
+          <p id="talk-duration-total" class="presentation-help" aria-live="polite">Timings can follow later.</p>
+        </fieldset>
+        <fieldset class="presentation-visibility" aria-describedby="visibility-note">
+          <legend>Who can see this talk?</legend>
+          <div class="visibility-options">
+            <label><input type="radio" name="visibility" value="internal" checked> Internal</label>
+            <label><input type="radio" name="visibility" value="public"> Public</label>
+          </div>
+          <p id="visibility-note" class="presentation-help" aria-live="polite">Only invited participants can see your talk and materials.</p>
+        </fieldset>
+        <details id="presentation-materials" class="materials-disclosure">
+          <summary>Materials <span class="field-hint">· optional</span></summary>
+          <p class="presentation-help">Add a link, upload a file, or both. Up to 20 MB per file.</p>
+          <div class="presentation-materials">
+            <fieldset>
+              <legend>Explainer</legend>
+              <label for="explainer-url">Explainer link</label>
+              <input id="explainer-url" type="url" placeholder="https://" maxlength="2048">
+              <label for="explainer-file">Upload HTML or PDF</label>
+              <input id="explainer-file" type="file" accept=".html,.htm,.pdf">
+              <p class="presentation-help">HTML files must include their images and scripts.</p>
+              <p id="explainer-current" class="material-current"></p>
+            </fieldset>
+            <fieldset>
+              <legend>Presentation slides</legend>
+              <label for="slides-url">Slides link</label>
+              <input id="slides-url" type="url" placeholder="https://" maxlength="2048">
+              <label for="slides-file">Upload PDF or PowerPoint</label>
+              <input id="slides-file" type="file" accept=".pdf,.pptx">
+              <p id="slides-current" class="material-current"></p>
+            </fieldset>
+          </div>
+        </details>
+        <div id="presentation-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" hidden></div>
+        <div class="presentation-actions">
+          <button id="save-presentation" class="primary" type="submit">Save talk</button>
+          <button id="withdraw-presentation" class="text-button" type="button" hidden>Withdraw proposal</button>
+        </div>
+      </form>
+    </section>
+    <div class="agenda-list" id="agenda-list"></div>
+  </main>
+  <footer>
+    <span>D3 · University of Würzburg</span>
+    <p class="footer-feedback">Send comments and suggestions to <a href="mailto:aabhash.dhakal@uni-wuerzburg.de?subject=D3%20seminar%20feedback">Aabhash</a>.</p>
+  </footer>
+  <noscript><p class="notice">Please enable JavaScript to view the agenda.</p></noscript>
+</body>
+</html>

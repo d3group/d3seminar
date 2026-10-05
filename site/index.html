@@ -1,66 +1,51 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="referrer" content="same-origin">
-  <meta name="description" content="Find a shared time for the D3 Research Seminar.">
-  <meta name="theme-color" content="#152d35">
-  <title>D3 Research Seminar</title>
-  <link rel="stylesheet" href="styles.css">
-  <script type="module" src="app.js"></script>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="same-origin"><meta name="theme-color" content="#ffffff">
+  <meta name="description" content="Three D3 research seminars in winter semester 2026/27 and a 2½-day onsite meeting in summer semester 2027.">
+  <title>D3 · Winter semester 2026/27</title>
+  <link rel="stylesheet" href="styles.css"><script type="module" src="home.js"></script>
 </head>
 <body>
   <header class="masthead">
-    <a class="brand" href="./" aria-label="D3 seminar home"><span class="mark">D3<span class="mark-dot">.</span></span><span class="brand-label">DATA DRIVEN DECISIONS<br><strong>Research seminar</strong></span></a>
-    <span class="edition" id="edition">SEMINAR</span>
+    <a class="university-brand" href="https://www.uni-wuerzburg.de/" aria-label="University of Würzburg"><img class="university-logo" src="assets/uni-wuerzburg.svg" width="347" height="152" alt="Julius-Maximilians-Universität Würzburg"></a>
+    <nav class="programme-tabs" aria-label="Main navigation">
+      <a href="./" data-invitation-link aria-current="page">Programme</a>
+      <a href="agenda.html" data-invitation-link>Agenda</a>
+      <a href="about.html" data-invitation-link>About</a>
+    </nav>
+    <a class="brand" href="./" data-invitation-link aria-label="D3 programme home"><img class="d3-logo" src="assets/d3.svg" width="241" height="48" alt="D3 · Data Driven Decisions"></a>
   </header>
-  <main>
-    <div class="pilot-banner" id="pilot-banner" hidden>Test seminar · These sample dates are for testing. This pilot has one invited participant.</div>
-    <section class="intro-grid">
-      <div class="intro">
-        <p class="eyebrow">A SPACE FOR IDEAS</p>
-        <h1>A time to share<br>what’s <em>next.</em></h1>
-        <p class="lead" id="subtitle">Ideas in progress. Time to discuss them.</p>
-        <p class="intro-copy">A seminar for sharing research, asking questions, and thinking together. Help us find one time when everyone can attend. Mark each option below; no account is needed.</p>
-        <div class="invitation-note"><span class="note-number">01 /</span><p>One seminar, everyone together.<br><span>Use the personal link in your email to respond.</span></p></div>
-      </div>
-      <section class="response-card" aria-labelledby="card-title">
-        <div class="card-top"><span class="eyebrow">FIND OUR SEMINAR TIME</span><span class="status-pill" id="status-pill">PREVIEW</span></div>
-        <h2 id="card-title">When can you join?</h2>
-        <p class="card-intro" id="greeting">A few options. One shared time.</p>
-        <p class="poll-meta" id="poll-meta"></p>
-        <p class="poll-deadline" id="poll-deadline"></p>
-        <div class="session" id="final-session" hidden><div><h3>Our seminar time is confirmed.</h3><p id="final-time"></p><p class="venue" id="session-location"></p></div></div>
-        <p id="notice" class="notice" role="status" aria-live="polite">Loading…</p>
-        <form id="response-form" method="post" hidden>
-          <input type="hidden" name="token" id="token">
-          <input type="hidden" name="revision" id="revision">
-          <p class="poll-help">Mark every option that works. Choose “If necessary” only if you would need to rearrange something. Blank options stay unanswered.</p>
-          <div class="bulk-actions"><button class="text-button" type="button" id="all-available">All times work</button><button class="text-button" type="button" id="all-unavailable">None of these work</button></div>
-          <div id="poll-options"></div>
-          <p class="answer-progress" id="answer-progress" aria-live="polite"></p>
-          <label class="notes-label" for="comment">A note for the organizer <span id="comment-hint">(optional)</span></label>
-          <textarea id="comment" name="comment" rows="3" maxlength="1000" placeholder="If no option works, suggest other days or times…"></textarea>
-          <button class="primary" id="submit-button" type="submit">Save my availability <span aria-hidden="true">↗</span></button>
-          <p class="privacy">Only the organizers can see your availability. Keep your personal link private. You can update your answers until the time is finalized.</p>
-        </form>
-        <div id="preview-actions" hidden><button class="primary" id="demo-button" type="button">Try the availability poll <span aria-hidden="true">↗</span></button><p class="privacy">A preview only. No response will be stored.</p></div>
-        <div id="demo-receipt" hidden><h3>That’s how responding will look.</h3><p>This was a demo. Nothing was sent or saved.</p><button class="secondary" id="demo-reset" type="button">Try the poll again</button></div>
-        <button class="calendar-link" id="calendar" type="button" hidden>Add confirmed time to calendar <span aria-hidden="true">↗</span></button>
+  <main class="programme-main">
+    <section class="programme-intro" aria-labelledby="programme-title">
+      <h1 id="programme-title">D3 Seminars and Onsite - WS 26/27</h1>
+      <p class="lead"><span id="home-greeting" hidden></span>Please enter your availability for the next D3 seminars.</p>
+    </section>
+    <section aria-label="Events">
+      <p class="notice" id="home-notice" role="status" aria-live="polite">Loading the programme…</p>
+      <div class="saved-response" id="saved-response" role="status" hidden></div>
+      <section class="programme-progress" id="programme-progress" aria-labelledby="progress-title" hidden>
+        <div class="progress-action">
+          <div><h2 id="progress-title">Confirm your availability</h2><p id="journey-progress" aria-live="polite"></p></div>
+          <a id="continue-link" class="primary progress-continue" hidden></a>
+        </div>
+        <ol class="progress-steps" id="progress-steps" aria-label="Your event responses"></ol>
       </section>
+      <aside id="presentation-nudge" class="presentation-nudge" aria-label="Your presentations" hidden></aside>
+      <ul class="calendar-key" aria-label="Calendar outlines">
+        <li><span class="calendar-key-circle date-proposed" aria-hidden="true"></span>Proposed</li>
+        <li title="The option or tied options with the most Available responses so far."><span class="calendar-key-circle date-leading" aria-hidden="true"></span>Leading so far</li>
+        <li><span class="calendar-key-circle date-confirmed" aria-hidden="true"></span>Confirmed</li>
+      </ul>
+      <div class="event-grid" id="event-grid"></div>
     </section>
-    <section class="how-it-works" aria-label="What happens next">
-      <div><span>01</span><h3>Mark your availability</h3><p>Use your personal email link to answer a short list of options.</p></div>
-      <div><span>02</span><h3>Find a time for everyone</h3><p>We’ll check any conditional answers with you before choosing a time.</p></div>
-      <div><span>03</span><h3>Save the final date</h3><p>Once everyone can attend, we’ll email the time and a calendar invitation.</p></div>
-    </section>
+    <p class="programme-note">A date is confirmed once everyone is available. Your personal link lets you respond to all four events.</p>
   </main>
   <footer>
-    <span>D3 · Data Driven Decisions</span>
-    <span>Good questions start a conversation.</span>
-    <p class="footer-feedback">Please send any comments, suggestions, or ideas for improvement to <a href="mailto:aabhash.dhakal@uni-wuerzburg.de?subject=D3%20seminar%20feedback">Aabhash</a>.</p>
+    <span>D3 · University of Würzburg</span>
+    <p class="footer-feedback">Send comments and suggestions to <a href="mailto:aabhash.dhakal@uni-wuerzburg.de?subject=D3%20seminar%20feedback">Aabhash</a>.</p>
   </footer>
-  <noscript><p class="notice">Please enable JavaScript to open your personal invitation, or reply to the invitation email.</p></noscript>
+  <noscript><p class="notice">Please enable JavaScript to view the events, or reply to your invitation email.</p></noscript>
 </body>
 </html>

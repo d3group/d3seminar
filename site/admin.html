@@ -7,27 +7,76 @@
   <link rel="stylesheet" href="styles.css"><script type="module" src="admin.js"></script>
 </head>
 <body>
-  <header class="masthead"><a class="brand" href="./"><span class="mark">D3<span class="mark-dot">.</span></span><span class="brand-label">RESEARCH SEMINAR<br><strong>Organizer</strong></span></a><span class="edition">PRIVATE / LOCAL</span></header>
+  <header class="masthead">
+    <a class="university-brand" href="https://www.uni-wuerzburg.de/" aria-label="University of Würzburg"><img class="university-logo" src="assets/uni-wuerzburg.svg" width="347" height="152" alt="Julius-Maximilians-Universität Würzburg"></a>
+    <a class="brand" href="./" aria-label="D3 programme home"><img class="d3-logo" src="assets/d3.svg" width="241" height="48" alt="D3 · Data Driven Decisions"></a>
+  </header>
   <main class="admin-main">
-    <p class="eyebrow">ONE TIME FOR EVERYONE</p><h1>Bring the group together.</h1>
+    <p class="eyebrow" id="admin-semester">Winter semester 2026/27</p><h1 id="admin-event-title">Organizer dashboard</h1>
+    <nav class="event-tabs" id="event-tabs" aria-label="Choose an event"></nav>
     <p class="notice" id="admin-notice" role="status" aria-live="polite">Loading your dashboard…</p>
     <section id="dashboard" hidden>
       <div class="dashboard-summary"><div><h2 id="response-count"></h2><p id="roster-count"></p><p id="admin-deadline"></p></div><button class="secondary refresh" id="refresh">Refresh responses</button></div>
       <p class="notice" id="outcome"></p>
       <h2>Candidate times</h2><p class="admin-help" id="admin-timezone"></p>
       <p class="admin-help">A time can be finalized only when every required attendee has marked it Available. Finalizing closes the poll. You can then send the confirmation emails below.</p>
-      <div class="table-scroll"><table><caption class="sr-only">Availability counts for each candidate time</caption><thead><tr><th scope="col">Option</th><th scope="col">Available</th><th scope="col">If necessary</th><th scope="col">Unavailable</th><th scope="col">Unknown</th><th scope="col">Next step</th></tr></thead><tbody id="slot-rows"></tbody></table></div>
-      <h2 class="section-title">Participants</h2><p class="admin-help">Only you can see these answers. Unknown means unanswered, including any people still missing from the required roster.</p>
+      <div class="table-scroll"><table><caption class="sr-only">Availability counts for each candidate time</caption><thead><tr><th scope="col">Option</th><th scope="col">Available</th><th scope="col">Unavailable</th><th scope="col">Awaiting reply</th><th scope="col">Next step</th></tr></thead><tbody id="slot-rows"></tbody></table></div>
+      <details class="admin-editor" id="schedule-editor">
+        <summary>Edit candidate dates and deadline</summary>
+        <p class="admin-help" id="schedule-help"></p>
+        <form id="schedule-form">
+          <label for="edit-deadline">Reply deadline</label><input id="edit-deadline" type="datetime-local" required>
+          <div id="schedule-options"></div>
+          <div class="save-actions"><button class="text-button" id="add-option" type="button">Add another option</button><button class="secondary" type="submit">Review date changes</button></div>
+        </form>
+        <section id="schedule-review" class="admin-review" aria-label="Review date changes" hidden>
+          <p id="schedule-effect"></p><ul id="schedule-review-options"></ul>
+          <label id="reset-consent-label" class="consent"><input type="checkbox" id="reset-consent"> Start a new availability round and archive the current answers.</label>
+          <button class="primary" id="save-schedule" type="button">Save reviewed changes</button>
+        </section>
+      </details>
+      <details class="admin-editor">
+        <summary>Edit the event programme</summary>
+        <p class="admin-help">Topics, presenters, room and agenda appear to invited participants after the date is confirmed. Editing them preserves availability. Saving does not send an email.</p>
+        <form id="programme-form" class="programme-form">
+          <label for="edit-topic">Topic</label><input id="edit-topic" maxlength="300">
+          <label for="edit-presenters">Presenters</label><input id="edit-presenters" maxlength="500" placeholder="Names, separated by commas">
+          <label for="edit-room">Room</label><input id="edit-room" maxlength="300">
+          <label for="edit-agenda">Short agenda</label><textarea id="edit-agenda" rows="4" maxlength="2000" placeholder="One item per line"></textarea>
+          <button class="secondary" type="submit">Save programme</button>
+        </form>
+      </details>
+      <h2 class="section-title">Participants</h2><p class="admin-help">Names, roles and availability are shared with invited participants. Emails and notes are only visible to organizers. Awaiting reply means unanswered, including any people still missing from the required roster.</p>
       <div class="table-scroll"><table><caption class="sr-only">Private participant responses</caption><thead id="people-head"></thead><tbody id="people-rows"></tbody></table></div>
-      <section class="mail-steps"><h2>Send from your university account</h2><p>Run these from the project folder in Terminal. Each command prepares email previews; add <code>--send</code> to deliver after entering your JMU password. No email is sent by the dashboard.</p>
+      <section class="mail-controls"><h2>Send from your university account</h2>
+        <p class="admin-help">Review each recipient and their personalised message before sending. Reminders go only to invited people with unfinished answers. Previously sent or attempted messages are skipped.</p>
+        <form id="mail-preview-form" class="save-actions">
+          <label for="mail-kind">Email type</label>
+          <select id="mail-kind"><option value="invite">Invitations</option><option value="remind">Reminders for unfinished replies</option><option value="confirm">Final confirmations and calendar</option></select>
+          <button class="secondary" type="submit">Preview recipients and emails</button>
+        </form>
+        <p id="mail-notice" class="notice" role="status" hidden></p>
+        <section id="mail-review" class="admin-review" aria-label="Email previews" hidden>
+          <p id="mail-count"></p><div id="mail-messages"></div>
+          <form id="mail-send-form" hidden>
+            <label class="consent"><input type="checkbox" id="mail-consent" required> I have reviewed these recipients and messages.</label>
+            <label for="smtp-password">University password</label><input id="smtp-password" type="password" autocomplete="off" required>
+            <p class="admin-help">Used for this send only. The application does not store your password.</p>
+            <button class="primary" id="send-mail" type="submit">Send reviewed emails</button>
+          </form>
+        </section>
+      </section>
+      <details class="mail-steps"><summary>Terminal commands</summary><p>These commands prepare email previews. Add <code>--send</code> to deliver after entering your JMU password.</p>
         <dl><dt>Invite the group</dt><dd><code>python3 scripts/seminar.py send invite --all</code></dd>
         <dt>Remind only people with unfinished answers</dt><dd><code>python3 scripts/seminar.py send remind --all</code></dd>
-        <dt>After choosing “Ask to reconfirm”, contact conditional attendees</dt><dd><code>python3 scripts/seminar.py send check --all</code></dd>
         <dt>After finalizing, send the time and calendar file to everyone</dt><dd><code>python3 scripts/seminar.py send confirm --all</code></dd></dl>
         <p>Repeated commands skip messages already sent or attempted. Test mode allows delivery only to your test address.</p>
-      </section>
+      </details>
     </section>
   </main>
-  <footer><span>D3 · Data Driven Decisions</span><p class="footer-feedback">Please send any comments, suggestions, or ideas for improvement to <a href="mailto:aabhash.dhakal@uni-wuerzburg.de?subject=D3%20seminar%20feedback">Aabhash</a>.</p></footer>
+  <footer>
+    <span>D3 · University of Würzburg</span>
+    <p class="footer-feedback">Send comments and suggestions to <a href="mailto:aabhash.dhakal@uni-wuerzburg.de?subject=D3%20seminar%20feedback">Aabhash</a>.</p>
+  </footer>
 </body>
 </html>
