@@ -1,0 +1,134 @@
+{
+  "campaign_id": "d3seminar-mvp",
+  "title": "D3 Research Seminar",
+  "subtitle": "Ideas in progress. Time to discuss them.",
+  "organizer": "D3 seminar team",
+  "timezone": "Europe/Berlin",
+  "location": "Test session · location to be confirmed",
+  "site_url": "https://d3group.github.io/d3seminar/",
+  "backend_url": "",
+  "test_mode": true,
+  "required_participants": 1,
+  "deadline": "2026-10-07T17:00:00+02:00",
+  "slots": [
+    {
+      "id": "test-session",
+      "start": "2026-10-09T14:00:00+02:00",
+      "end": "2026-10-09T16:00:00+02:00"
+    },
+    {
+      "id": "monday-morning",
+      "start": "2026-10-12T10:00:00+02:00",
+      "end": "2026-10-12T12:00:00+02:00"
+    },
+    {
+      "id": "tuesday-afternoon",
+      "start": "2026-10-13T14:00:00+02:00",
+      "end": "2026-10-13T16:00:00+02:00"
+    },
+    {
+      "id": "wednesday-morning",
+      "start": "2026-10-14T11:00:00+02:00",
+      "end": "2026-10-14T13:00:00+02:00"
+    }
+  ],
+  "events": [
+    {
+      "id": "seminar-1",
+      "name": "Seminar 1",
+      "kind": "seminar",
+      "description": "The first of our three research seminars. Find a time for the whole group."
+    },
+    {
+      "id": "seminar-2",
+      "name": "Seminar 2",
+      "kind": "seminar",
+      "description": "Our second research seminar. Share your availability for this session.",
+      "campaign_id": "d3seminar-mvp-2",
+      "title": "D3 · Seminar 2",
+      "slots": [
+        {
+          "id": "option-1",
+          "start": "2026-10-19T14:00:00+02:00",
+          "end": "2026-10-19T16:00:00+02:00"
+        },
+        {
+          "id": "option-2",
+          "start": "2026-10-20T14:00:00+02:00",
+          "end": "2026-10-20T16:00:00+02:00"
+        },
+        {
+          "id": "option-3",
+          "start": "2026-10-21T14:00:00+02:00",
+          "end": "2026-10-21T16:00:00+02:00"
+        },
+        {
+          "id": "option-4",
+          "start": "2026-10-22T14:00:00+02:00",
+          "end": "2026-10-22T16:00:00+02:00"
+        }
+      ]
+    },
+    {
+      "id": "seminar-3",
+      "name": "Seminar 3",
+      "kind": "seminar",
+      "description": "The third research seminar. Help us choose a time everyone can attend.",
+      "campaign_id": "d3seminar-mvp-3",
+      "title": "D3 · Seminar 3",
+      "slots": [
+        {
+          "id": "option-1",
+          "start": "2026-10-26T14:00:00+01:00",
+          "end": "2026-10-26T16:00:00+01:00"
+        },
+        {
+          "id": "option-2",
+          "start": "2026-10-27T14:00:00+01:00",
+          "end": "2026-10-27T16:00:00+01:00"
+        },
+        {
+          "id": "option-3",
+          "start": "2026-10-28T14:00:00+01:00",
+          "end": "2026-10-28T16:00:00+01:00"
+        },
+        {
+          "id": "option-4",
+          "start": "2026-10-29T14:00:00+01:00",
+          "end": "2026-10-29T16:00:00+01:00"
+        }
+      ]
+    },
+    {
+      "id": "onsite",
+      "name": "Onsite meeting",
+      "kind": "onsite",
+      "description": "Two days together in person, 09:00–17:00 each day. Choose the date pairs when you can attend both days.",
+      "campaign_id": "d3seminar-mvp-onsite",
+      "title": "D3 · Onsite meeting",
+      "duration_days": 2,
+      "slots": [
+        {
+          "id": "pair-1",
+          "start": "2026-11-02T09:00:00+01:00",
+          "end": "2026-11-03T17:00:00+01:00"
+        },
+        {
+          "id": "pair-2",
+          "start": "2026-11-05T09:00:00+01:00",
+          "end": "2026-11-06T17:00:00+01:00"
+        },
+        {
+          "id": "pair-3",
+          "start": "2026-11-09T09:00:00+01:00",
+          "end": "2026-11-10T17:00:00+01:00"
+        }
+      ],
+      "daily_hours": {
+        "start": "09:00",
+        "end": "17:00"
+      }
+    }
+  ],
+  "semester": "Winter semester 2026/27"
+}

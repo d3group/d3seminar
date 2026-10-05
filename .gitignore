@@ -1,4 +1,5 @@
 .private/
+/vault/
 .env
 .env.*
 !.env.example

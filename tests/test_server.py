@@ -13,7 +13,7 @@ import seminar
 from server import Store, create_server, receipt
 
 TOKEN = 'A' * 43
-POLL = json.loads((seminar.ROOT / 'site/config.json').read_text())
+POLL = json.loads((Path(__file__).parent / 'fixtures/programme.json').read_text())
 POLL = seminar.poll_data(POLL)
 SLOT = POLL['slots'][0]['id']
 INVITE = dict(id='a' * 24, name='Ada', email='ada@example.com', token_hash=seminar.digest(TOKEN),
@@ -44,6 +44,23 @@ class StoreTests(unittest.TestCase):
                 self.store.respond(dict(RESPONSE, **bad))
         self.assertEqual(self.store.invitation(TOKEN)['answers'], {})
 
+    def test_calendar_edits_merge_choices_without_overwriting_other_answers_or_notes(self):
+        other = POLL['slots'][1]['id']
+        self.store.respond(dict(RESPONSE, comment='Keep my note.'))
+        edit = dict(token=TOKEN, revision=INVITE['revision'], partial='true', **{'answer:' + other:'unavailable'})
+        saved = self.store.respond(edit)
+        self.assertEqual(saved['answers'], {SLOT:'available', other:'unavailable'})
+        self.assertEqual(saved['comment'], 'Keep my note.')
+        saved = self.store.respond(dict(edit, **{'answer:' + other:''}))
+        self.assertEqual(saved['answers'], {SLOT:'available'})
+        for bad in [dict(revision='0'*64), {'answer:missing':'available'}, {'answer:' + other:'if_needed'}]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                self.store.respond(dict(edit, **bad))
+        self.assertEqual(self.store.invitation(TOKEN)['answers'], {SLOT:'available'})
+        self.store.select('finalize', SLOT, self.store.dashboard()['snapshot'])
+        with self.assertRaisesRegex(ValueError, 'finalized'):
+            self.store.respond(edit)
+
     def test_sync_preserves_unchanged_response_and_revokes_removed_participant(self):
         self.store.respond(RESPONSE)
         self.store.sync([INVITE])
@@ -72,6 +89,21 @@ class StoreTests(unittest.TestCase):
         self.assertNotIn('token_hash', response)
         self.assertNotIn('participants', response)
 
+    def test_calendar_votes_require_active_invitation_and_exclude_private_fields(self):
+        other = dict(INVITE, id='b'*24, name='Bea', email='bea@example.com', token_hash=seminar.digest('B'*43))
+        self.store.sync([INVITE, other])
+        self.store.respond(dict(RESPONSE, comment='Private organizer note.'))
+        self.store.respond(dict(RESPONSE, token='B'*43, comment='Another private note.', **{'answer:' + SLOT:'unavailable'}))
+        people = self.store.invitation(TOKEN, include_votes=True)['participants']
+        self.assertEqual(people, [dict(name='Ada', role='', answers={SLOT:'available'}), dict(name='Bea', role='', answers={SLOT:'unavailable'})])
+        for token in (None, '', 'X'*43):
+            with self.assertRaises(ValueError):
+                self.store.invitation(token, include_votes=True)
+        self.store.sync([INVITE])
+        self.assertEqual(self.store.invitation(TOKEN, include_votes=True)['participants'], people[:1])
+        with self.assertRaises(ValueError):
+            self.store.invitation('B'*43, include_votes=True)
+
     def test_receipt_escapes_untrusted_names(self):
         self.store.sync([dict(INVITE, name='<img src=x onerror=alert(1)>')])
         body = receipt(self.store.respond(RESPONSE), TOKEN)
@@ -89,6 +121,39 @@ class StoreTests(unittest.TestCase):
         with self.store.connect() as connection:
             history = json.loads(connection.execute('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
         self.assertEqual(history['records'][0]['answers'], {SLOT:'available'})
+
+    def test_legacy_conditional_answers_are_archived_and_become_unanswered(self):
+        self.store.respond(dict(RESPONSE, comment='Preserve this note'))
+        other_slot = POLL['slots'][1]['id']
+        with self.store.connect() as connection:
+            record = self.store.records(connection)[0]
+            record['answers'][other_slot] = 'if_needed'
+            connection.execute('UPDATE invitations SET data=? WHERE id=?', (json.dumps(record), record['id']))
+            self.store.write_state(connection, dict(proposed_slot_id=other_slot, proposal_id='old', programme=dict(topic='Keep this')))
+        self.store = Store(self.store.database)
+        current = self.store.invitation(TOKEN)
+        self.assertEqual(current['answers'], {SLOT:'available'})
+        self.assertEqual(current['comment'], 'Preserve this note')
+        self.assertEqual(current['state'], dict(programme=dict(topic='Keep this')))
+        with self.store.connect() as connection:
+            before = connection.execute('SELECT COUNT(*) FROM history').fetchone()[0]
+            history = json.loads(connection.execute('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
+        self.assertEqual(history['records'][0]['answers'][other_slot], 'if_needed')
+        Store(self.store.database)
+        with self.store.connect() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM history').fetchone()[0], before)
+        with self.assertRaises(ValueError):
+            self.store.respond(dict(RESPONSE, **{'answer:' + other_slot:'if_needed'}))
+
+    def test_role_sync_preserves_availability_and_shares_only_role_name_and_answers(self):
+        self.store.respond(RESPONSE)
+        self.store.sync([dict(INVITE, role='student')])
+        people = self.store.invitation(TOKEN, include_votes=True)['participants']
+        self.assertEqual(people, [dict(name='Ada', role='student', answers={SLOT:'available'})])
+        self.store.sync([dict(INVITE, role='professor')])
+        self.assertEqual(self.store.invitation(TOKEN)['answers'], {SLOT:'available'})
+        with self.assertRaises(ValueError):
+            self.store.sync([dict(INVITE, role='invalid')])
 
     def test_migration_preserves_old_single_slot_rsvp_in_history(self):
         legacy = dict(INVITE, active=True, response='confirmed', comment='Old RSVP', updated_at='old')
@@ -112,7 +177,7 @@ class GroupSchedulingTests(unittest.TestCase):
         self.revision = seminar.event_revision(self.poll)
         self.tokens = [chr(65 + i) * 43 for i in range(20)]
         self.invites = [dict(INVITE, id=f'{i:024x}', name=f'Person {i}', email=f'person{i}@example.com',
-                             token_hash=seminar.digest(token), poll=self.poll, revision=self.revision) for i, token in enumerate(self.tokens)]
+                             token_hash=seminar.digest(token), role='professor' if i < 5 else 'student', poll=self.poll, revision=self.revision) for i, token in enumerate(self.tokens)]
         self.store.sync(self.invites)
 
     def answer(self, index, value='available', all_slots=False):
@@ -122,7 +187,7 @@ class GroupSchedulingTests(unittest.TestCase):
     def choose(self, action='finalize'):
         return self.store.select(action, SLOT, self.store.dashboard()['snapshot'])
 
-    def test_nineteen_of_twenty_cannot_finalize_or_request_conditional_confirmation(self):
+    def test_nineteen_of_twenty_cannot_finalize_and_proposals_are_retired(self):
         for i in range(19):
             self.answer(i)
         slot = self.store.dashboard()['slots'][0]
@@ -131,14 +196,22 @@ class GroupSchedulingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.choose(action)
 
-    def test_conditional_answer_must_be_explicitly_changed_before_finalizing(self):
-        for i in range(20):
-            self.answer(i, 'if_needed' if i == 19 else 'available')
+    def test_calendar_votes_distinguish_all_states_and_unanswered_people(self):
+        self.answer(0, 'available')
+        self.answer(2, 'unavailable')
+        people = self.store.invitation(self.tokens[0], include_votes=True)['participants']
+        self.assertEqual(len(people), 20)
+        answers = {person['name']: person['answers'].get(SLOT) for person in people}
+        self.assertEqual([answers[f'Person {i}'] for i in range(4)], ['available', None, 'unavailable', None])
+        self.assertTrue(all(set(person) == {'name', 'role', 'answers'} for person in people))
+        self.assertEqual(sum(person['role'] == 'professor' for person in people), 5)
+        self.assertEqual(sum(person['role'] == 'student' for person in people), 15)
+
+    def test_everyone_must_be_available_before_finalizing(self):
+        for i in range(19):
+            self.answer(i)
         with self.assertRaisesRegex(ValueError, 'Everyone'):
             self.choose()
-        state = self.choose('propose')
-        self.assertEqual(self.store.invitation(self.tokens[19])['state']['proposed_slot_id'], SLOT)
-        self.assertTrue(state['proposal_id'])
         self.answer(19)
         state = self.choose()
         self.assertEqual(state['final_event']['slot_id'], SLOT)
@@ -164,7 +237,7 @@ class GroupSchedulingTests(unittest.TestCase):
             self.answer(i, 'unavailable' if i == 19 else 'available', all_slots=True)
         dashboard = self.store.dashboard()
         self.assertEqual(dashboard['completed'], 20)
-        self.assertFalse(any(s['ready'] or s['can_propose'] for s in dashboard['slots']))
+        self.assertFalse(any(s['ready'] for s in dashboard['slots']))
         with self.assertRaises(ValueError):
             self.choose()
 
@@ -185,12 +258,13 @@ class GroupSchedulingTests(unittest.TestCase):
         self.store.respond(dict(token=self.tokens[0], revision=self.revision, **{'answer:' + SLOT:''}))
         self.assertEqual(self.store.invitation(self.tokens[0])['answers'], {})
 
-    def test_declining_proposed_time_cancels_reconfirmation(self):
-        for i in range(20):
-            self.answer(i, 'if_needed' if i == 19 else 'available')
-        self.choose('propose')
-        self.answer(19, 'unavailable')
-        self.assertEqual(self.store.dashboard()['state'], {})
+    def test_role_capacity_is_validated_without_changing_saved_answers(self):
+        self.answer(0)
+        invites = copy.deepcopy(self.invites)
+        invites[5]['role'] = 'professor'
+        with self.assertRaisesRegex(ValueError, 'more than 5'):
+            self.store.sync(invites)
+        self.assertEqual(self.store.invitation(self.tokens[0])['answers'], {SLOT:'available'})
 
 
 class HTTPTests(unittest.TestCase):
@@ -199,7 +273,7 @@ class HTTPTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory()
         cls.store = Store(Path(cls.temp.name) / 'responses.sqlite3')
         cls.store.sync([INVITE])
-        config = json.loads((seminar.ROOT / 'site/config.json').read_text())
+        config = json.loads((Path(__file__).parent / 'fixtures/programme.json').read_text())
         cls.server = create_server(0, store=cls.store, config=config, admin_secret='secret' * 8)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -220,11 +294,49 @@ class HTTPTests(unittest.TestCase):
         connection.close()
         return result
 
+    def test_event_api_keeps_answers_finalization_and_calendar_separate(self):
+        config = seminar.event_config(self.server.config, 'seminar-2')
+        poll = seminar.poll_data(config)
+        revision = seminar.event_revision(poll)
+        invite = dict(INVITE, name='Seminar Two Participant', poll=poll, revision=revision, event_id='seminar-2')
+        headers = {'Content-Type':'application/json'}
+        def admin(**data):
+            return self.request('POST', '/api/admin', json.dumps(dict(event_id='seminar-2', secret='secret'*8, **data)), headers)
+        self.assertEqual(admin(action='sync', invites=[invite])[0], 200)
+        prior = self.store.invitation(TOKEN)
+        response = dict(token=TOKEN, revision=revision, event_id='seminar-2', **{'answer:' + poll['slots'][0]['id']:'available'})
+        status, _ = self.request('POST', '/api/respond', urlencode(response), {'Content-Type':'application/x-www-form-urlencoded'})
+        self.assertEqual(status, 200)
+        status, body = self.request('POST', '/api/invitation', json.dumps(dict(token=TOKEN, event_id='seminar-2', include_votes=True)), headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['participants'], [dict(name='Seminar Two Participant', role='', answers={poll['slots'][0]['id']:'available'})])
+        status, body = self.request('POST', '/api/invitation', json.dumps(dict(token=TOKEN, include_votes=True)), headers)
+        self.assertEqual(status, 200)
+        self.assertNotIn('Seminar Two Participant', body)
+        status, body = admin(action='dashboard')
+        state = json.loads(body)
+        self.assertEqual(admin(action='finalize', slot_id=poll['slots'][0]['id'], snapshot=state['snapshot'])[0], 200)
+        self.assertEqual(self.store.invitation(TOKEN), prior)
+        status, calendar = self.request('POST', '/api/calendar', json.dumps(dict(event_id='seminar-2', token=TOKEN)), headers)
+        self.assertEqual(status, 200)
+        self.assertIn('UID:d3seminar-mvp-2@d3seminar', calendar)
+        status, _ = self.request('POST', '/api/calendar', json.dumps(dict(token=TOKEN)), headers)
+        self.assertEqual(status, 400)
+        response['event_id'] = 'seminar-3'
+        self.assertEqual(self.request('POST', '/api/respond', urlencode(response), {'Content-Type':'application/x-www-form-urlencoded'})[0], 400)
+        status, body = self.request('POST', '/api/invitation', json.dumps(dict(event_id='../../outside', token=TOKEN)), headers)
+        self.assertEqual(status, 400)
+        self.assertIn('Unknown event', body)
+
     def test_static_server_never_exposes_private_files_or_source(self):
         for path in ['/.private/settings.json', '/../.private/settings.json', '/scripts/server.py', '/.git/config']:
             with self.subTest(path=path):
                 self.assertEqual(self.request('GET', path)[0], 404)
         self.assertEqual(self.request('GET', '/')[0], 200)
+        self.assertEqual(self.request('GET', '/about.html')[0], 200)
+        self.assertEqual(self.request('GET', '/about.js')[0], 200)
+        self.assertEqual(self.request('GET', '/agenda.html')[0], 200)
+        self.assertEqual(self.request('GET', '/agenda.js')[0], 200)
 
     def test_admin_requires_secret_and_cross_site_requests_are_blocked(self):
         status, body = self.request('POST', '/api/admin', json.dumps(dict(action='responses', secret='wrong')), {'Content-Type':'application/json'})
@@ -233,11 +345,36 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/respond', urlencode(RESPONSE), {'Content-Type':'application/x-www-form-urlencoded', 'Origin':'https://evil.example'})[0], 403)
         self.assertEqual(self.request('GET', '/', headers={'Host':'evil.example'})[0], 403)
 
+    def test_calendar_votes_are_not_public_or_accessible_to_uninvited_people(self):
+        headers = {'Content-Type':'application/json'}
+        for request in (dict(include_votes=True), dict(token='X'*43, include_votes=True),
+                        dict(token=TOKEN, event_id='seminar-3', include_votes=True)):
+            status, body = self.request('POST', '/api/invitation', json.dumps(request), headers)
+            self.assertEqual(status, 400)
+            self.assertNotIn('participants', body)
+            self.assertNotIn('Ada', body)
+        self.assertEqual(self.request('GET', '/api/invitation?include_votes=true')[0], 404)
+
     def test_real_form_post_writes_sqlite_before_success_receipt(self):
         status, body = self.request('POST', '/api/respond', urlencode(RESPONSE), {'Content-Type':'application/x-www-form-urlencoded'})
         self.assertEqual(status, 200)
         self.assertIn('Response saved.', body)
         self.assertEqual(self.store.invitation(TOKEN)['answers'], {SLOT:'available'})
+
+    def test_fetch_save_returns_committed_answers_and_rejects_stale_forms_as_json(self):
+        headers = {'Content-Type':'application/x-www-form-urlencoded', 'Accept':'application/json'}
+        status, body = self.request('POST', '/api/respond', urlencode(RESPONSE), headers)
+        self.assertEqual(status, 200)
+        saved = json.loads(body)
+        self.assertTrue(saved['ok'])
+        self.assertEqual(saved['answers'], self.store.invitation(TOKEN)['answers'])
+        self.assertTrue(saved['updated_at'])
+        self.assertNotIn('token_hash', saved)
+        status, body = self.request('POST', '/api/respond', urlencode(dict(RESPONSE, revision='0'*64)), headers)
+        self.assertEqual(status, 400)
+        self.assertFalse(json.loads(body)['ok'])
+        self.assertIn('changed', json.loads(body)['error'])
+        self.assertEqual(self.store.invitation(TOKEN)['answers'], saved['answers'])
 
     def test_link_scans_and_get_requests_do_not_submit(self):
         self.assertEqual(self.request('GET', '/api/respond?' + urlencode(RESPONSE))[0], 404)
