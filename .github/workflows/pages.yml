@@ -15,9 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements.txt
       - name: Check sender and response handling
         run: |
           python3 -m unittest discover -s tests -p 'test_*.py'
+          node --check site/api.js
           node --check site/app.js
           node --check site/admin.js
           node --check site/home.js
@@ -34,6 +39,11 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Configure the hosted API
+        env:
+          D3_API_URL: ${{ vars.D3_API_URL }}
+          D3_SITE_URL: ${{ vars.D3_SITE_URL }}
+        run: python3 scripts/configure_site.py
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

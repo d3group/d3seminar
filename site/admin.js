@@ -1,9 +1,10 @@
+import {apiFetch, loadConfig} from './api.js';
 import {slotLabel, dailyHoursLabel} from './shared.js';
 const $ = id => document.getElementById(id);
 const eventId = new URLSearchParams(location.search).get('event') || 'seminar-1';
 const secret = new URLSearchParams(location.hash.slice(1)).get('key');
 history.replaceState(null, '', location.pathname + location.search);
-let dashboard, schedulePreview, mailPreview;
+let dashboard, schedulePreview;
 const names = {available:'Available', unavailable:'Unavailable'};
 function element(tag, text, className) {
   const node = document.createElement(tag); node.textContent = text;
@@ -16,7 +17,7 @@ function notice(text, error = false) {
 function when(slot) { return slotLabel(slot, dashboard.poll.timezone, dashboard.poll.daily_hours); }
 
 async function api(action, data = {}) {
-  const response = await fetch('/api/admin', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action, secret, event_id:eventId, ...data})});
+  const response = await apiFetch('admin', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action, secret, event_id:eventId, ...data})});
   const result = await response.json();
   if (!response.ok || !result.ok) throw new Error(result.error || 'The request failed.');
   return result;
@@ -27,7 +28,7 @@ async function choose(slot, button) {
     await api('finalize', {slot_id:slot.id, snapshot:dashboard.snapshot});
     await refresh();
     $('mail-kind').value = 'confirm';
-    notice('Time finalized. Preview the confirmation emails below to send the calendar invitation. No email has been sent yet.');
+    notice('Time finalized. Send the calendar invitation with the local email service. No email has been sent yet.');
   } catch (error) { notice(error.message, true); button.disabled = false; }
 }
 function render() {
@@ -39,7 +40,7 @@ function render() {
   $('admin-timezone').textContent = `All times in ${d.poll.timezone}.`;
   $('admin-deadline').textContent = 'Reply deadline: ' + new Intl.DateTimeFormat('en-GB', {timeZone:d.poll.timezone, dateStyle:'medium', timeStyle:'short'}).format(new Date(d.poll.deadline));
   const ready = d.slots.filter(s => s.ready);
-  $('outcome').textContent = d.state.final_event ? `Finalized: ${when(d.state.final_event)}. Preview the confirmation emails below.`
+  $('outcome').textContent = d.state.final_event ? `Finalized: ${when(d.state.final_event)}. Send confirmations with the local email service.`
     : d.registered !== d.required ? `The roster is incomplete or has the wrong size. Register all ${d.required} required attendees before choosing a time.`
     : ready.length ? `${ready.length} option${ready.length === 1 ? ' works' : 's work'} for everyone. You can finalize one below.`
     : d.slots.some(s => s.unknown) ? 'Waiting for availability. Unanswered options cannot count as agreement.'
@@ -79,7 +80,7 @@ function localInput(value, dateOnly = false) {
 }
 function clearSchedulePreview() { schedulePreview = null; $('schedule-review').hidden = true; }
 function clearMailPreview() {
-  mailPreview = null; $('mail-review').hidden = true; $('mail-consent').checked = false; $('smtp-password').value = '';
+  $('mail-review').hidden = true;
 }
 function addOption(slot) {
   const onsite = Boolean(dashboard.poll.daily_hours);
@@ -153,9 +154,8 @@ $('mail-preview-form').addEventListener('submit', async event => {
   event.preventDefault(); const button = event.submitter; button.disabled = true; clearMailPreview();
   const kind = $('mail-kind').value;
   try {
-    const preview = await api('preview_mail', {kind});
+    const preview = await api('preview_mail', {kind, mail_event:kind === 'confirm' ? eventId : 'next'});
     if (kind !== $('mail-kind').value) return;
-    mailPreview = {...preview, kind};
     $('mail-count').textContent = `${preview.messages.length} email${preview.messages.length === 1 ? '' : 's'} from ${preview.sender}`;
     $('mail-messages').replaceChildren();
     preview.messages.forEach((mail, index) => {
@@ -163,23 +163,10 @@ $('mail-preview-form').addEventListener('submit', async event => {
       details.append(element('summary', `${mail.name} · ${mail.to}`), element('p', mail.subject, 'mail-subject'), element('pre', mail.body));
       $('mail-messages').append(details);
     });
-    $('mail-review').hidden = false; $('mail-send-form').hidden = !preview.messages.length;
-    $('send-mail').textContent = `Send ${preview.messages.length} reviewed email${preview.messages.length === 1 ? '' : 's'}`;
-    mailNotice(preview.messages.length ? 'Preview only. No email has been sent.' : 'No eligible messages. Replies already completed and messages already sent or attempted are excluded.');
+    $('mail-review').hidden = false;
+    mailNotice(preview.messages.length ? 'Preview only. Send from the local email service on your computer.' : 'No eligible messages for this email type. Previous deliveries and current responses have been checked.');
   } catch (error) { mailNotice(error.message, true); }
   finally { button.disabled = false; }
-});
-$('mail-send-form').addEventListener('submit', async event => {
-  event.preventDefault();
-  if (!mailPreview || !$('mail-consent').checked) return;
-  const reviewed = mailPreview;
-  let password = $('smtp-password').value; $('smtp-password').value = '';
-  $('send-mail').disabled = true; mailNotice('Sending the reviewed emails…');
-  try {
-    const result = await api('send_mail', {kind:reviewed.kind, preview:reviewed.preview, password});
-    mailNotice(`${result.sent} email${result.sent === 1 ? '' : 's'} accepted by the university mail server.${result.skipped ? ` ${result.skipped} skipped because responses changed.` : ''}`);
-  } catch (error) { mailNotice(error.message, true); }
-  finally { password = null; clearMailPreview(); $('send-mail').disabled = false; }
 });
 async function refresh() {
   dashboard = await api('dashboard'); notice('Showing saved responses. Refresh to check for updates.'); render();
@@ -188,8 +175,7 @@ $('refresh').addEventListener('click', () => refresh().catch(error => notice(err
 if (!secret) notice('Open this private dashboard with: python3 scripts/seminar.py admin. Reopen it that way after reloading this page.', true);
 else start().catch(error => notice(error.message, true));
 async function start() {
-  const response = await fetch('config.json', {cache:'no-store'});
-  const config = await response.json();
+  const config = await loadConfig();
   const selected = config.events.find(event => event.id === eventId);
   if (!selected) throw new Error('Unknown event. Reopen the organizer dashboard.');
   $('admin-event-title').textContent = selected.name;
@@ -197,7 +183,7 @@ async function start() {
   $('admin-semester').textContent = selected.semester || config.semester;
   for (const event of config.events) {
     const link = element('a', event.name);
-    link.href = 'admin?' + new URLSearchParams({event:event.id}) + '#' + new URLSearchParams({key:secret});
+    link.href = 'admin.html?' + new URLSearchParams({event:event.id}) + '#' + new URLSearchParams({key:secret});
     if (event.id === eventId) link.setAttribute('aria-current', 'page');
     $('event-tabs').append(link);
   }

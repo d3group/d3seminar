@@ -1,4 +1,4 @@
-"""Local organiser edits and reviewed email delivery."""
+"""Organiser edits and email delivery records."""
 
 import copy
 import fcntl
@@ -9,6 +9,7 @@ from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import seminar
+import presentations
 
 
 def local_datetime(value, zone):
@@ -31,6 +32,8 @@ def write_config(path, config):
 class Organizer:
     def __init__(self, config, stores, config_file, private):
         self.config, self.stores, self.config_file, self.private = config, stores, config_file, private
+        with (private / 'command.lock').open('a'):
+            pass
         self.journal = private / 'pending-edit.json'
         if self.journal.exists():
             with self.lock():
@@ -54,7 +57,7 @@ class Organizer:
         return self.stores[event_id].database.parent
 
     def reload_config(self):
-        local = {key:self.config[key] for key in ('site_url', 'backend_url')}
+        local = {key:self.config[key] for key in ('site_url', 'api_url', 'backend_url') if key in self.config}
         self.config.clear()
         self.config.update(seminar.read_json(self.config_file), **local)
 
@@ -122,7 +125,7 @@ class Organizer:
                 unchanged_options = poll['slots'] == invite['poll']['slots']
                 invite.update(poll=poll, revision=revision)
                 if unchanged_options:
-                    for kind in ('invite', 'remind'):
+                    for kind in ('invite', 'remind', 'present'):
                         old_key = kind + ':' + old_revision
                         if old_key in invite['deliveries']:
                             invite['deliveries'][kind + ':' + revision] = invite['deliveries'][old_key]
@@ -172,65 +175,94 @@ class Organizer:
             state.update(programme={key:value.strip() for key,value in programme.items()}, programme_updated_at=seminar.now())
             store.write_state(connection, state)
 
+    def upcoming_seminars(self):
+        now = datetime.fromisoformat(seminar.now())
+        events = []
+        for entry in self.config['events']:
+            if entry.get('kind') != 'seminar' or entry['id'] not in self.stores:
+                continue
+            dashboard = self.stores[entry['id']].dashboard()
+            poll = dashboard['poll']
+            if not poll:
+                continue
+            final = dashboard['state'].get('final_event')
+            slots = [final] if final else poll['slots']
+            remaining = [s for s in slots if datetime.fromisoformat(s['end']) > now]
+            if remaining:
+                events.append((min(s['start'] for s in remaining), entry))
+        return [entry for _, entry in sorted(events, key=lambda item:datetime.fromisoformat(item[0]))]
+
     def mail_queue(self, event_id, kind):
-        if kind not in {'invite', 'remind', 'confirm'}:
+        if kind not in {'invite', 'remind', 'present', 'confirm'}:
             raise ValueError('Choose a supported email type.')
+        upcoming = self.upcoming_seminars()
+        if event_id == 'next':
+            if not upcoming:
+                raise ValueError('There are no upcoming seminars.')
+            event_id = upcoming[0]['id']
         config = seminar.event_config(self.config, event_id)
         local = seminar.read_json(self.private / 'settings.json')
         invitations = self.records(event_id)
         if config['test_mode'] and any(r['email'] != local['test_recipient'] for r in invitations):
             raise ValueError('Test mode allows only your test address. No email was sent.')
         dashboard = self.stores[event_id].dashboard()
+        config.update(dashboard['poll'] or {})
         responses = {p['id']:p for p in dashboard['participants']}
+        index = next((i for i,e in enumerate(upcoming) if e['id'] == event_id), None)
+        later = upcoming[index+1:] if index is not None else []
+        planned, registered = set(), {}
+        if kind == 'present':
+            for entry in [{'id':event_id}, *later]:
+                store = self.stores[entry['id']]
+                with store.connect() as connection:
+                    for person in store.records(connection):
+                        if not person['active']:
+                            continue
+                        registered.setdefault(person['email'], set()).add(entry['id'])
+                        if presentations.own(connection, person['id']).get('title'):
+                            planned.add(person['email'])
         messages = []
         for invite in invitations:
             key = seminar.eligible(invite, responses.get(invite['id']), kind, dashboard['state'])
-            if key:
-                mail = seminar.message(config, local, invite, kind, dashboard['state'])
-                messages.append((invite, key, mail))
-        visible = [dict(to=invite['email'], name=invite['name'], subject=str(mail['Subject']),
-                        body=mail.get_body(preferencelist=('plain',)).get_content()) for invite, key, mail in messages]
-        preview = seminar.event_revision(dict(kind=kind, messages=visible, sender=local['sender_email'],
-                                             keys=[key for invite,key,mail in messages], state=dashboard['state']))
-        return dict(preview=preview, messages=visible, sender=local['sender_email']), (config, local, invitations, messages)
+            if not key or kind == 'present' and invite['email'] in planned:
+                continue
+            alternatives = [e for e in later if e['id'] in registered.get(invite['email'], set())]
+            mail = seminar.message(config, local, invite, kind, dashboard['state'], alternatives)
+            row = dict(id=invite['id'], key=key, to=invite['email'], name=invite['name'], subject=str(mail['Subject']),
+                       body=mail.get_body(preferencelist=('plain',)).get_content(),
+                       html=mail.get_body(preferencelist=('html',)).get_content())
+            row['attachments'] = [dict(name=part.get_filename(), content=part.get_payload(decode=True).decode()) for part in mail.iter_attachments()]
+            row['preview'] = seminar.event_revision(dict(message=row, sender=local['sender_email'], sender_name=local['sender_name']))
+            messages.append(row)
+        return dict(event_id=event_id, event_name=config.get('name', config['title']), kind=kind, messages=messages,
+                    sender=local['sender_email'], sender_name=local['sender_name'])
 
     def preview_mail(self, event_id, kind):
         with self.lock():
-            return self.mail_queue(event_id, kind)[0]
+            return self.mail_queue(event_id, kind)
 
-    def send_mail(self, event_id, kind, preview, password):
-        if not isinstance(password, str) or not password:
-            raise ValueError('Enter your university password to send the reviewed emails.')
+    def claim_mail(self, event_id, kind, participant_id, preview, message_id):
+        if not isinstance(message_id, str) or not re.fullmatch(r'<[^<>\s]{1,250}>', message_id):
+            raise ValueError('Invalid message identifier.')
         with self.lock():
-            visible, (config, local, invitations, messages) = self.mail_queue(event_id, kind)
-            if preview != visible['preview']:
-                raise ValueError('Recipients or email details changed. Preview the emails again before sending.')
-            if not messages:
-                raise ValueError('There are no eligible emails to send.')
-            if not local.get('smtp_username'):
-                raise ValueError('Configure your university SMTP username first.')
-            sent, skipped = 0, 0
-            try:
-                with seminar.smtplib.SMTP_SSL(local['smtp_host'], local['smtp_port'], context=seminar.ssl.create_default_context(), timeout=30) as smtp:
-                    smtp.login(local['smtp_username'], password)
-                    for invite, key, mail in messages:
-                        dashboard = self.stores[event_id].dashboard()
-                        person = next((p for p in dashboard['participants'] if p['id'] == invite['id']), None)
-                        if seminar.eligible(invite, person, kind, dashboard['state']) != key:
-                            skipped += 1
-                            continue
-                        outbox = self.directory(event_id) / 'outbox'
-                        outbox.mkdir(exist_ok=True, mode=0o700)
-                        path = outbox / f'{invite["id"]}-{kind}.eml'
-                        path.write_bytes(bytes(mail)); path.chmod(0o600)
-                        invite['deliveries'][key] = dict(status='attempted', at=seminar.now(), message_id=mail['Message-ID'])
-                        seminar.save_private(self.directory(event_id) / 'invitations.json', invitations)
-                        smtp.send_message(mail, from_addr=local['sender_email'], to_addrs=[invite['email']])
-                        invite['deliveries'][key]['status'] = 'sent'
-                        seminar.save_private(self.directory(event_id) / 'invitations.json', invitations)
-                        sent += 1
-            except (OSError, seminar.smtplib.SMTPException):
-                return dict(sent=sent, skipped=skipped, error='Sending stopped. Check your university login and inbox before retrying. Any attempted messages are excluded from automatic retries.')
-            finally:
-                password = None
-            return dict(sent=sent, skipped=skipped)
+            queue = self.mail_queue(event_id, kind)
+            row = next((m for m in queue['messages'] if m['id'] == participant_id), None)
+            if not row:
+                return dict(claimed=False)
+            if row['preview'] != preview:
+                raise ValueError('The email details changed. Preview the emails again before sending.')
+            records = self.records(event_id)
+            invite = next(r for r in records if r['id'] == participant_id)
+            invite['deliveries'][row['key']] = dict(status='attempted', at=seminar.now(), message_id=message_id)
+            seminar.save_private(self.directory(event_id) / 'invitations.json', records)
+            return dict(claimed=True)
+
+    def finish_mail(self, event_id, participant_id, key, message_id):
+        with self.lock():
+            records = self.records(event_id)
+            invite = next((r for r in records if r['id'] == participant_id), None)
+            delivery = invite.get('deliveries', {}).get(key) if invite else None
+            if not delivery or delivery.get('message_id') != message_id:
+                raise ValueError('This email attempt does not match the delivery record.')
+            delivery.update(status='sent', sent_at=seminar.now())
+            seminar.save_private(self.directory(event_id) / 'invitations.json', records)

@@ -1,0 +1,4 @@
+{$D3_API_HOST} {
+    header Strict-Transport-Security "max-age=31536000"
+    reverse_proxy backend:8765
+}

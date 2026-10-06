@@ -91,6 +91,17 @@ class PresentationTests(unittest.TestCase):
         self.assertIsNone(cleared['questions_minutes'])
         self.assertEqual(cleared['presentation_minutes'], 25)
 
+    def test_placeholder_requires_a_title_stays_internal_and_can_become_a_talk(self):
+        with self.assertRaises(ValueError):
+            presentations.save(self.store, TOKEN, dict(title='', status='placeholder'))
+        with self.assertRaises(ValueError):
+            presentations.save(self.store, TOKEN, dict(title='Provisional topic', status='placeholder', visibility='public'))
+        saved = presentations.save(self.store, TOKEN, dict(title='Provisional topic', status='placeholder'))
+        self.assertEqual(saved['status'], 'placeholder')
+        self.assertEqual(self.store.invitation(TOKEN, include_presentations=True)['presentations'][0]['status'], 'placeholder')
+        updated = presentations.save(self.store, TOKEN, dict(self.talk, status='talk'), saved['version'])
+        self.assertEqual(updated['status'], 'talk')
+
     def test_visibility_defaults_to_internal_and_public_access_can_be_revoked(self):
         saved = presentations.save(self.store, TOKEN, self.talk)
         self.assertEqual(saved['visibility'], 'internal')

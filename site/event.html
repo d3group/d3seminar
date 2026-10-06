@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="referrer" content="same-origin">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="description" content="Find a shared time for this D3 event in winter semester 2026/27.">
   <meta name="theme-color" content="#ffffff">
   <title>D3 Research Seminar</title>
@@ -57,10 +57,8 @@
             <button class="primary" id="submit-button" type="submit" value="continue">Save my availability</button>
             <button class="text-button" id="save-later" type="submit" value="stay">Save for later</button>
           </div>
-          <p class="privacy">Your name and availability are visible to invited participants. Notes are only visible to the organizers. Keep your personal link private. You can update your answers until the time is finalized.</p>
+          <p class="privacy">Your name and availability are visible to invited participants; only totals appear publicly. Notes are only visible to the organizers. Keep your personal link private. You can update your answers until the time is finalized.</p>
         </form>
-        <div id="preview-actions" hidden><button class="primary" id="demo-button" type="button">Try the availability poll</button><p class="privacy">A preview only. No response will be stored.</p></div>
-        <div id="demo-receipt" hidden><h3>Preview complete.</h3><p>This was a demo. Nothing was sent or saved.</p><button class="secondary" id="demo-reset" type="button">Try the poll again</button></div>
         <button class="calendar-link" id="calendar" type="button" hidden>Add confirmed time to calendar</button>
       </section>
     </section>

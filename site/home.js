@@ -1,6 +1,8 @@
+import {apiFetch, loadConfig} from './api.js';
 import {selectEvent, slotLabel, eventHref, durationLabel, preserveInvitationLinks, answeredCount, responseComplete, eventFinished, loadProgramme, nextEvent, nextSeminar, eventDisclosure, programmeProgress, showSavedResponse, voteCounts, renderProgramme, participantRings, ringArc, calendarDay, renderPresentationNudge, onsiteDays} from './shared.js';
 const $ = id => document.getElementById(id);
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
+const requestedEvent = new URLSearchParams(location.search).get('event');
 preserveInvitationLinks(token);
 const expandedEvents = new Map();
 const answerNames = {available:'Available', unavailable:'Unavailable', unknown:'Awaiting reply'};
@@ -44,11 +46,13 @@ function voteRing(people, slots, hint) {
   }
   return svg;
 }
-function renderCalendar(container, event, confirmed = false, people = null, editor = null) {
+function renderCalendar(container, event, confirmed = false, people = null, editor = null, totals = null) {
+  const canInspect = Boolean(people || totals);
+  const countsFor = slot => totals ? totals[slot.id || slot.slot_id] : voteCounts(people || [], slot, event.required_participants);
   const draft = {...editor?.invitation.answers};
   const changes = () => Object.fromEntries(event.slots.filter(slot => (draft[slot.id] || '') !== (editor.invitation.answers[slot.id] || '')).map(slot => ['answer:' + slot.id, draft[slot.id] || '']));
   let saving = false;
-  const counts = new Map(event.slots.map(slot => [slot, (people || []).filter(person => answerFor(person, slot) === 'available').length]));
+  const counts = new Map(event.slots.map(slot => [slot, countsFor(slot).available]));
   const highest = Math.max(0, ...counts.values());
   const standing = slots => confirmed ? 'confirmed' : highest > 0 && slots.some(slot => counts.get(slot) === highest) ? 'leading' : 'proposed';
   const standingNames = {proposed:'Proposed', leading:'Leading so far', confirmed:'Confirmed'};
@@ -128,7 +132,7 @@ function renderCalendar(container, event, confirmed = false, people = null, edit
       container.querySelectorAll('button, input').forEach(control => control.disabled = true);
       try {
         const body = new URLSearchParams({token, event_id:event.id, revision:editor.invitation.revision, partial:'true', ...changes()});
-        const response = await fetch('/api/respond', {method:'POST', headers:{Accept:'application/json'}, body});
+        const response = await apiFetch('respond', {method:'POST', headers:{Accept:'application/json'}, body});
         const invitation = await response.json();
         if (!response.ok || !invitation.ok) throw new Error(invitation.error || 'Your response could not be saved. Please try again.');
         editor.onSave(invitation, selectedDate.dataset.selection);
@@ -155,7 +159,7 @@ function renderCalendar(container, event, confirmed = false, people = null, edit
     if (editor && !confirmed) panel.append(responseForm(slots));
     for (const slot of slots) {
       panel.append(element('p', slotLabel(slot, event.timezone, event.daily_hours), 'votes-slot'));
-      const counts = voteCounts(people, slot, event.required_participants);
+      const counts = countsFor(slot);
       const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
       panel.append(element('p', `${counts.available} of ${total} available`, 'votes-count'));
       const breakdown = element('dl', '', 'vote-breakdown');
@@ -164,6 +168,7 @@ function renderCalendar(container, event, confirmed = false, people = null, edit
         item.append(element('dt', answerNames[state]), element('dd', String(count))); breakdown.append(item);
       }
       panel.append(breakdown);
+      if (!people) continue;
       if (event.required_participants > people.length) panel.append(element('p', 'Awaiting reply includes people who have not been registered yet.', 'votes-count'));
       const list = element('ul', '', 'vote-people'); list.tabIndex = 0;
       list.setAttribute('aria-label', 'Participant responses for ' + slotLabel(slot, event.timezone, event.daily_hours));
@@ -227,22 +232,23 @@ function renderCalendar(container, event, confirmed = false, people = null, edit
               if (onsiteOptions.length) cell.classList.add('calendar-with-options');
             }
           }
-          const date = element(slots ? (people ? 'button' : 'a') : 'span', '', 'calendar-date');
+          const date = element(slots ? (canInspect || !token ? 'button' : 'a') : 'span', '', 'calendar-date');
           if (dayNote) date.title = dayNote;
           date.append(element('span', String(day), 'calendar-day-number'));
           if (slots) {
             date.classList.add('date-' + state);
             const label = `${standingNames[state]}: ${slots.map(slot => slotLabel(slot, event.timezone, event.daily_hours)).join('; ')}`;
-            date.setAttribute('aria-label', `${day} ${monthLabel}. ${dayNote ? dayNote + '. ' : ''}${label}. ${people ? 'Show responses for' : 'View'} ${event.name}.`);
-            if (people) {
+            date.title = dayNote ? `${dayNote}. ${label}` : label;
+            date.setAttribute('aria-label', `${day} ${monthLabel}. ${dayNote ? dayNote + '. ' : ''}${label}. ${canInspect ? 'Show responses for' : 'View'} ${event.name}.`);
+            if (canInspect) {
               date.dataset.selection = key;
               date.type = 'button'; date.setAttribute('aria-expanded', 'false'); date.setAttribute('aria-controls', panel.id);
-              date.append(voteRing(people, slots, hint));
+              if (people) date.append(voteRing(people, slots, hint));
               date.addEventListener('click', () => showVotes(date, slots));
               dateButtons.set(key, {date, slots});
-            } else {
+            } else if (token) {
               date.href = eventHref(event.id, token); date.title = dayNote ? `${dayNote}. ${label}` : label;
-            }
+            } else { date.type = 'button'; date.disabled = true; }
           }
           cell.append(date);
         }
@@ -290,6 +296,8 @@ function renderCalendar(container, event, confirmed = false, people = null, edit
     }
     container.append(legend, hint);
     if (people.some(person => !roleNames[person.role])) container.append(element('p', 'People awaiting a role appear in the response list.', 'calendar-vote-hint'));
+  }
+  if (canInspect) {
     container.append(panel);
     const open = dateButtons.get(editor?.openDate);
     if (open) showVotes(open.date, open.slots);
@@ -335,6 +343,7 @@ function card(event) {
   agenda.setAttribute('aria-label', event.name + ' agenda preview');
   renderAgendaPreview(agenda, event, null, Boolean(token));
   const bottom = element('div', '', 'event-card-bottom');
+  bottom.hidden = !token;
   const status = element('span', '', 'event-status');
   status.hidden = true;
   const link = element('a', token ? 'Share availability' : 'View event', 'event-link');
@@ -352,7 +361,7 @@ function markNextSeminar(cards, programme = cards) {
   for (const entry of cards) {
     entry.node.querySelector('.next-seminar-note')?.remove();
     if (entry.event.id === next?.event.id) entry.node.prepend(element('p', 'Up next!', 'next-seminar-note'));
-    entry.disclosure.open = expandedEvents.get(entry.event.id) ?? entry.event.id === next?.event.id;
+    entry.disclosure.open = expandedEvents.get(entry.event.id) ?? (entry.event.id === next?.event.id || entry.event.id === requestedEvent);
   }
   const featured = cards.find(entry => entry.event.id === next?.event.id) || cards[0];
   const later = element('div', '', 'event-later-list');
@@ -422,26 +431,30 @@ function renderProgress(programme) {
 }
 
 async function start() {
-  const response = await fetch('config.json', {cache:'no-store'});
-  if (!response.ok) throw new Error('The programme could not be loaded. Please try again.');
-  const config = await response.json();
+  const config = await loadConfig();
   document.title = 'D3 · ' + config.semester;
   const cards = config.events.map(entry => ({event:selectEvent(config, entry.id), ...card(selectEvent(config, entry.id))}));
   markNextSeminar(cards);
-  const backend = config.backend_url ? new URL(config.backend_url) : null;
   if (!token) {
-    $('home-notice').textContent = 'Use the personal link in your invitation email to save responses.';
-    if (backend?.origin === location.origin) await Promise.all(cards.map(async entry => {
+    $('home-intro').textContent = 'Availability totals and public presenters for the next D3 seminars.';
+    $('home-notice').textContent = 'Public view · Editing requires your personal invitation link.';
+    await Promise.all(cards.map(async entry => {
       try {
-        const response = await fetch('/api/public-presentations', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({event_id:entry.event.id})});
+        const response = await apiFetch('public-event', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({event_id:entry.event.id})});
         const data = await response.json();
-        if (response.ok && data.ok) renderAgendaPreview(entry.agenda, entry.event, data.presentations);
-      } catch { /* The agenda link remains available when its preview cannot load. */ }
+        if (!response.ok || !data.ok) throw new Error(data.error || 'Public responses could not be loaded.');
+        entry.event = {...entry.event, ...data.poll, slots:data.final_event ? [data.final_event] : data.poll.slots};
+        renderCalendar(entry.calendar, entry.event, Boolean(data.final_event), null, null, data.totals);
+        renderAgendaPreview(entry.agenda, entry.event, data.presentations);
+      } catch {
+        entry.calendar.append(element('p', 'Availability totals could not be loaded. Please refresh to try again.', 'notice error'));
+      }
     }));
+    markNextSeminar(cards);
     return;
   }
+  $('home-intro').textContent = 'Please enter your availability for the next D3 seminars.';
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('Your personal link is incomplete. Please open the full link from your email.');
-  if (!backend || backend.origin !== location.origin) throw new Error('Saving responses is not open on this site yet. Please reply to your invitation email.');
   const programme = await loadProgramme(config, token, true, true);
   markNextSeminar(cards, programme);
   cards.forEach((entry, index) => {

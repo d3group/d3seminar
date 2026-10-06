@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
 import seminar
@@ -139,45 +139,6 @@ class OrganizerTests(unittest.TestCase):
         calendar = seminar.calendar_bytes(event)
         self.assertIn(b'LOCATION:Room 2', calendar)
         self.assertIn(b'Research progress', calendar)
-
-    def test_preview_is_private_and_does_not_send_or_record_deliveries(self):
-        with patch.object(seminar.smtplib, 'SMTP_SSL') as smtp:
-            preview = self.organizer.preview_mail('seminar-1', 'invite')
-            smtp.assert_not_called()
-        self.assertEqual(len(preview['messages']), 1)
-        self.assertEqual(preview['messages'][0]['to'], 'ada@example.com')
-        self.assertIn('#token=', preview['messages'][0]['body'])
-        self.assertEqual(seminar.read_json(self.private / 'invitations.json')[0]['deliveries'], {})
-
-    def test_changed_recipients_and_duplicate_delivery_are_blocked(self):
-        preview = self.organizer.preview_mail('seminar-1', 'invite')
-        self.answer()
-        current = self.store.invitation(self.token)
-        self.store.respond(dict(token=self.token, revision=current['revision'], **{'answer:' + s['id']:'available' for s in current['poll']['slots']}))
-        with patch.object(seminar.smtplib, 'SMTP_SSL') as smtp:
-            with self.assertRaisesRegex(ValueError, 'changed'):
-                self.organizer.send_mail('seminar-1', 'invite', preview['preview'], 'password')
-            smtp.assert_not_called()
-        self.store.respond(dict(token=self.token, revision=current['revision']))
-        preview = self.organizer.preview_mail('seminar-1', 'invite')
-        with patch.object(seminar.smtplib, 'SMTP_SSL') as smtp:
-            result = self.organizer.send_mail('seminar-1', 'invite', preview['preview'], 'password')
-            self.assertEqual(result['sent'], 1)
-            self.assertEqual(self.organizer.preview_mail('seminar-1', 'invite')['messages'], [])
-            with self.assertRaises(ValueError):
-                self.organizer.send_mail('seminar-1', 'invite', preview['preview'], 'password')
-            self.assertEqual(smtp.return_value.__enter__.return_value.send_message.call_count, 1)
-
-    def test_smtp_timeout_records_attempt_and_does_not_retry(self):
-        preview = self.organizer.preview_mail('seminar-1', 'invite')
-        with patch.object(seminar.smtplib, 'SMTP_SSL') as smtp:
-            smtp.return_value.__enter__.return_value.send_message.side_effect = TimeoutError()
-            result = self.organizer.send_mail('seminar-1', 'invite', preview['preview'], 'password')
-        self.assertEqual(result['sent'], 0)
-        self.assertTrue(result['error'])
-        self.assertEqual(self.organizer.preview_mail('seminar-1', 'invite')['messages'], [])
-        records = seminar.read_json(self.private / 'invitations.json')
-        self.assertEqual(records[0]['deliveries']['invite:' + records[0]['revision']]['status'], 'attempted')
 
     def test_local_times_reject_nonexistent_or_ambiguous_clock_times(self):
         for value in ('2027-03-28T02:30', '2026-10-25T02:30'):

@@ -1,0 +1,87 @@
+name: d3seminar
+
+services:
+  backups:
+    profiles: [backups]
+    image: d3seminar-backend:local
+    user: "${D3_UID:-10001}:${D3_GID:-10001}"
+    entrypoint: [python, scripts/backup.py]
+    command: [schedule]
+    environment:
+      D3_BACKUP_DIR: /backups
+      D3_BACKUP_KEEP: "${D3_BACKUP_KEEP:-30}"
+      D3_BACKUP_HOUR: "${D3_BACKUP_HOUR:-3}"
+      D3_BACKUP_TIMEZONE: "${D3_BACKUP_TIMEZONE:-Europe/Berlin}"
+    volumes:
+      - type: bind
+        source: "${D3_DATA_PATH:-./data}"
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${D3_BACKUP_PATH:-./backups}"
+        target: /backups
+        bind:
+          create_host_path: false
+    network_mode: none
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, scripts/backup.py, status]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 1
+    restart: unless-stopped
+
+  frontend:
+    image: d3seminar-frontend:local
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    ports:
+      - "127.0.0.1:${D3_FRONTEND_PORT:-8080}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  email:
+    profiles: [email]
+    image: d3seminar-email:local
+    build:
+      context: .
+      dockerfile: docker/email.Dockerfile
+    user: "${D3_UID:-10001}:${D3_GID:-10001}"
+    network_mode: "service:backend"
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      D3_MAIL_API_URL: "http://127.0.0.1:8765/"
+    volumes:
+      - type: bind
+        source: ./.mailer
+        target: /mail
+        bind:
+          create_host_path: false
+    stdin_open: true
+    tty: true
+
+  backend:
+    image: d3seminar-backend:local
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    user: "${D3_UID:-10001}:${D3_GID:-10001}"
+    environment:
+      D3_SITE_URL: "http://localhost:${D3_FRONTEND_PORT:-8080}/"
+    volumes:
+      - type: bind
+        source: "${D3_DATA_PATH:-./data}"
+        target: /data
+        bind:
+          create_host_path: false
+    restart: unless-stopped

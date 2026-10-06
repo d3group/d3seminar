@@ -1,0 +1,74 @@
+name: d3seminar-production
+
+services:
+  backups:
+    profiles: [backups]
+    image: d3seminar-backend:production
+    user: "${D3_UID:-10001}:${D3_GID:-10001}"
+    entrypoint: [python, scripts/backup.py]
+    command: [schedule]
+    environment:
+      D3_BACKUP_DIR: /backups
+      D3_BACKUP_KEEP: "${D3_BACKUP_KEEP:-30}"
+      D3_BACKUP_HOUR: "${D3_BACKUP_HOUR:-3}"
+      D3_BACKUP_TIMEZONE: "${D3_BACKUP_TIMEZONE:-Europe/Berlin}"
+    volumes:
+      - type: bind
+        source: "${D3_DATA_PATH:-./data}"
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${D3_BACKUP_PATH:-./backups}"
+        target: /backups
+        bind:
+          create_host_path: false
+    network_mode: none
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, scripts/backup.py, status]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 1
+    restart: unless-stopped
+
+  backend:
+    image: d3seminar-backend:production
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    user: "${D3_UID:-10001}:${D3_GID:-10001}"
+    environment:
+      D3_SITE_URL: "${D3_SITE_URL:-https://d3group.github.io/d3seminar/}"
+      D3_API_URL: "https://${D3_API_HOST:?Set D3_API_HOST in .env.production}/"
+    volumes:
+      - type: bind
+        source: "${D3_DATA_PATH:-./data}"
+        target: /data
+        bind:
+          create_host_path: false
+    restart: unless-stopped
+
+  https:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      D3_API_HOST: "${D3_API_HOST:?Set D3_API_HOST in .env.production}"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

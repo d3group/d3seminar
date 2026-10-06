@@ -51,15 +51,16 @@ try {
   const eventCalendar = id => page.locator(`[data-event="${id}"] .event-calendar`);
   const outlineStyle = (locator, pseudo = null) => locator.evaluate((node, pseudo) => getComputedStyle(node, pseudo).borderBottomStyle, pseudo);
   assert.equal(await page.locator('.calendar-month').count(), 4);
-  assert.deepEqual(await eventCalendar('seminar-1').locator('a.calendar-date').allTextContents(), ['9', '12', '13', '14']);
-  assert.deepEqual(await eventCalendar('onsite').locator('a.calendar-date').allTextContents(), ['2', '3', '5', '6', '9', '10']);
+  await eventCalendar('seminar-1').locator('button.calendar-date:enabled').first().waitFor();
+  assert.deepEqual(await eventCalendar('seminar-1').locator('button.calendar-date').allTextContents(), ['9', '12', '13', '14']);
+  assert.deepEqual(await eventCalendar('onsite').locator('button.calendar-date').allTextContents(), ['2', '3', '5', '6', '9', '10']);
   assert.equal(await eventCalendar('onsite').locator('.pair-to-next').count(), 3);
   assert.equal(await eventCalendar('onsite').locator('.pair-from-previous').count(), 3);
   assert.equal(await eventCalendar('seminar-1').locator('.calendar-pair').count(), 0);
-  assert.equal(await outlineStyle(eventCalendar('seminar-1').locator('a.calendar-date').first()), 'dotted');
+  assert.equal(await outlineStyle(eventCalendar('seminar-1').locator('button.calendar-date').first()), 'dotted');
   assert.equal(await outlineStyle(eventCalendar('onsite').locator('.calendar-pair').first(), '::after'), 'dotted');
   assert.deepEqual(await eventCalendar('seminar-1').locator('tbody tr').first().locator('td').allTextContents(), ['', '', '', '1', '2', '3', '4']);
-  assert.match(await eventCalendar('seminar-1').locator('a.calendar-date').first().getAttribute('title'), /14:00–16:00/);
+  assert.match(await eventCalendar('seminar-1').locator('button.calendar-date').first().getAttribute('title'), /14:00–16:00/);
   await mkdir(new URL('../test-results/',import.meta.url),{recursive:true});
   await page.locator('[data-event="onsite"] .event-disclosure-summary').click();
   await page.screenshot({path:root+'test-results/home-desktop.png',fullPage:true});
@@ -69,11 +70,17 @@ try {
   await page.setViewportSize({width:320,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.setViewportSize({width:1440,height:1080});
-  await eventCalendar('seminar-1').locator('a.calendar-date').first().click();
-  await page.getByRole('button',{name:'Try the availability poll'}).click();
-  await page.getByRole('button',{name:'All times work',exact:true}).click();
-  await page.getByRole('button',{name:'Preview my availability'}).click();
-  await page.getByText('This was a demo. Nothing was sent or saved.').waitFor();
+  await eventCalendar('seminar-1').locator('button.calendar-date').first().click();
+  await page.getByText('0 of 1 available', {exact:true}).waitFor();
+  assert.deepEqual(await eventCalendar('seminar-1').locator('.vote-breakdown dd').allTextContents(), ['0', '0', '1']);
+  assert.equal(await page.locator('.calendar-response-form, .vote-people, .vote-ring, input, textarea').count(), 0);
+  assert.equal(await page.locator('#programme-progress').isVisible(), false);
+  assert.equal((await page.locator('body').textContent()).includes('Browser Test'), false);
+  await page.goto(details.base + 'event.html?event=onsite#demo=1');
+  await page.waitForURL(details.base + '?event=onsite');
+  await eventCalendar('onsite').locator('button.calendar-date:enabled').first().waitFor();
+  assert.equal(await page.locator('[data-event="onsite"] details').first().getAttribute('open'), '');
+  assert.equal(await page.locator('input, textarea, #demo-button').count(), 0);
 
   // Existing personal links now open the programme and retain access when navigating.
   await page.goto(details.home);
@@ -122,6 +129,22 @@ try {
   await back();
   assert.equal(await first().getByLabel('Available', {exact:true}).isChecked(), true);
   assert.equal(await page.locator('#comment').inputValue(), 'Other mornings could work too.');
+
+  // Public visitors see current totals without identities, notes, or editing controls.
+  const visitor = await browser.newPage();
+  visitor.on('pageerror', error => errors.push(error.message));
+  await visitor.goto(details.base);
+  const publicDate = visitor.locator('[data-event="seminar-1"] button.calendar-date:enabled').first();
+  await publicDate.click();
+  await visitor.getByText('1 of 1 available', {exact:true}).waitFor();
+  assert.equal(await outlineStyle(publicDate), 'dashed');
+  assert.equal(await visitor.locator('.calendar-response-form, .vote-people, .vote-ring, input, textarea').count(), 0);
+  assert.doesNotMatch(await visitor.locator('body').textContent(), /Browser Test|Other mornings/);
+  await visitor.screenshot({path:root+'test-results/public-responses-desktop.png', fullPage:true});
+  await visitor.setViewportSize({width:390,height:844});
+  assert.equal(await visitor.evaluate(()=>document.documentElement.scrollWidth<=innerWidth), true);
+  await visitor.screenshot({path:root+'test-results/public-responses-mobile.png', fullPage:true});
+  await visitor.close();
 
   // Calendar edits preserve other choices and notes, and failed saves keep the draft.
   await page.goto(details.home);
@@ -180,7 +203,8 @@ try {
   await admin.getByRole('button', {name:'Preview recipients and emails',exact:true}).click();
   await admin.locator('#mail-count').filter({hasText:'1 email from organizer@example.com'}).waitFor();
   assert.match(await admin.locator('.mail-message pre').textContent(), /Hello Browser Test/);
-  assert.equal(await admin.getByRole('button', {name:'Send 1 reviewed email',exact:true}).isVisible(), true);
+  assert.equal(await admin.locator('#smtp-password, #send-mail, #mail-send-form').count(), 0);
+  assert.match(await admin.locator('#mail-notice').textContent(), /local email service/);
   await admin.getByText('Edit the event programme', {exact:true}).click();
   await admin.locator('#edit-topic').fill('Research in progress');
   await admin.locator('#edit-presenters').fill('Ada and Bea');
@@ -278,6 +302,17 @@ try {
   await publicAgenda.locator('.agenda-event').nth(3).waitFor();
   assert.equal(await publicAgenda.getByText('No public talks yet.', {exact:true}).count(), 4);
   assert.equal(await publicAgenda.getByText('Research in progress', {exact:true}).count(), 0);
+  assert.match(await publicAgenda.locator('[data-event="seminar-1"] .agenda-timing').textContent(), /9 Oct 2026.*14:00–16:00/);
+  await publicAgenda.getByRole('link', {name:'Event details for Seminar 1', exact:true}).click();
+  await publicAgenda.waitForURL(details.base + '?event=seminar-1');
+  const confirmedPublic = publicAgenda.locator('[data-event="seminar-1"] button.calendar-date:enabled');
+  await confirmedPublic.waitFor();
+  assert.equal(await confirmedPublic.count(), 1);
+  assert.equal(await outlineStyle(confirmedPublic), 'solid');
+  await confirmedPublic.click();
+  await publicAgenda.getByText('1 of 1 available', {exact:true}).waitFor();
+  assert.doesNotMatch(await publicAgenda.locator('body').textContent(), /Browser Test|Research in progress|Ada and Bea|Room 2/);
+  assert.equal(await publicAgenda.locator('.calendar-response-form, input, textarea').count(), 0);
   await publicAgenda.goto(details.base + 'agenda.html#token=' + 'Z'.repeat(43));
   await publicAgenda.locator('#agenda-notice.error').waitFor();
   assert.equal(await publicAgenda.locator('.agenda-event').count(), 0);
@@ -418,12 +453,13 @@ try {
     ];
     await route.fulfill({response, json:config});
   });
+  await edgePage.route('**/api/public-event', route => route.fulfill({status:503, json:{ok:false, error:'Temporarily unavailable'}}));
   await edgePage.goto(details.base);
   await edgePage.locator('.event-card').nth(3).waitFor();
-  assert.deepEqual(await edgePage.locator('[data-event="seminar-1"] a.calendar-date').allTextContents(), ['9']);
-  assert.deepEqual(await edgePage.locator('[data-event="seminar-3"] a.calendar-date').allTextContents(), ['26']);
+  assert.deepEqual(await edgePage.locator('[data-event="seminar-1"] button.calendar-date').allTextContents(), ['9']);
+  assert.deepEqual(await edgePage.locator('[data-event="seminar-3"] button.calendar-date').allTextContents(), ['26']);
   assert.deepEqual(await edgePage.locator('[data-event="onsite"] caption').allTextContents(), ['December 2026', 'January 2027']);
-  assert.deepEqual(await edgePage.locator('[data-event="onsite"] a.calendar-date').allTextContents(), ['27', '28', '31', '1']);
+  assert.deepEqual(await edgePage.locator('[data-event="onsite"] button.calendar-date').allTextContents(), ['27', '28', '31', '1']);
   assert.deepEqual(await edgePage.locator('[data-event="onsite"] .pair-wrap-out .calendar-day-number').allTextContents(), ['27', '31']);
   assert.deepEqual(await edgePage.locator('[data-event="onsite"] .pair-wrap-in .calendar-day-number').allTextContents(), ['28', '1']);
   const holidayCalendar = edgePage.locator('[data-event="onsite"]');
@@ -432,12 +468,12 @@ try {
     assert.equal(await holidayCalendar.locator(`[data-date="${date}"].calendar-day-off`).count(), 1);
   }
   assert.equal(await holidayCalendar.locator('[data-date="2027-01-07"].calendar-day-off').count(), 0);
-  const holidayLink = holidayCalendar.locator('[data-date="2027-01-01"] a');
+  const holidayLink = holidayCalendar.locator('[data-date="2027-01-01"] button');
   assert.match(await holidayLink.getAttribute('title'), /New Year’s Day/);
   assert.ok(Number(await holidayLink.evaluate(node => getComputedStyle(node).opacity)) < 1);
-  await edgePage.keyboard.press('Tab');
-  await holidayLink.focus();
-  assert.equal(await holidayLink.evaluate(node => getComputedStyle(node).opacity), '1');
+  assert.equal(await holidayLink.isDisabled(), true);
+  assert.equal(await edgePage.locator('.event-calendar .notice.error').count(), 4);
+  assert.equal(await edgePage.locator('input, textarea').count(), 0);
   assert.equal(await edgePage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await holidayCalendar.screenshot({path:root+'test-results/calendar-holidays-mobile.png'});
   await edgePage.close();

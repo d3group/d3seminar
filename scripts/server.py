@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Serve the seminar and its SQLite response store on this Mac only."""
+"""Serve the seminar API and SQLite storage with Waitress."""
 
 import hmac
 import html
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
+from email.message import Message
+from http import HTTPStatus
+from waitress import create_server as waitress_server
 from pathlib import Path
 import re
 import sqlite3
@@ -77,9 +80,7 @@ class Store:
         seminar.validate_poll(invite['poll'])
         if seminar.event_revision(invite['poll']) != invite['revision']:
             raise ValueError('Poll revision does not match.')
-        base = urlparse(invite['site_url'])
-        if base.scheme != 'http' or base.hostname not in ('127.0.0.1', 'localhost') or base.path != '/' or base.query or base.fragment:
-            raise ValueError('Use the local seminar website for this backend.')
+        seminar.validate_site_url(invite['site_url'])
 
     def sync(self, invites):
         if not isinstance(invites, list) or not 1 <= len(invites) <= 100:
@@ -146,6 +147,22 @@ class Store:
                 result['participants'] = [dict(name=person['name'], role=person.get('role', ''), answers=person['answers']) for person in people
                                           if person['active'] and person.get('revision') == record['revision'] and 'poll' in person]
             return result
+
+    def public_event(self, fallback_poll):
+        with self.connect() as connection:
+            connection.execute('BEGIN')
+            records = [r for r in self.records(connection) if r['active'] and 'poll' in r]
+            poll = seminar.poll_data(records[0]['poll'] if records else fallback_poll)
+            records = [r for r in records if r['revision'] == seminar.event_revision(poll)]
+            totals = {}
+            for slot in poll['slots']:
+                counts = {value:sum(r['answers'].get(slot['id']) == value for r in records) for value in ('available', 'unavailable')}
+                counts['unknown'] = max(poll['required_participants'], len(records)) - sum(counts.values())
+                totals[slot['id']] = counts
+            final = self.state(connection).get('final_event')
+            # Public data is an explicit projection: never include the private programme or roster.
+            final = {key:final[key] for key in ('slot_id', 'start', 'end')} if final else None
+            return dict(poll=poll, final_event=final, totals=totals, presentations=presentations.listing(self, connection))
 
     def respond(self, params):
         partial = params.get('partial', 'false')
@@ -244,40 +261,60 @@ def receipt(record, token):
                 + '<a class="primary" href="' + html.escape(link, quote=True) + '">Return to the seminar</a>')
 
 
-class Handler(BaseHTTPRequestHandler):
-    server_version = 'D3Seminar/1.0'
-
-    def log_message(self, *_):
-        # Invitation tokens and participant responses must never appear in access logs.
-        pass
+class Handler:
+    def __init__(self, application, environ):
+        self.server = application
+        self.path = environ['PATH_INFO']
+        self.rfile = environ['wsgi.input']
+        self.headers = Message()
+        for key, value in environ.items():
+            if key.startswith('HTTP_'):
+                self.headers[key[5:].replace('_', '-')] = value
+        for key in ('CONTENT_TYPE', 'CONTENT_LENGTH'):
+            if environ.get(key):
+                self.headers[key.replace('_', '-')] = environ[key]
 
     def reply(self, status, data, content_type='application/json', policy=None, disposition=None):
         body = (json.dumps(data) if content_type == 'application/json' else data)
         body = body.encode() if isinstance(body, str) else body
-        self.send_response(status)
-        self.send_header('Content-Type', content_type)
-        self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
-        self.send_header('Referrer-Policy', 'no-referrer' if policy else 'same-origin')
-        self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('X-Frame-Options', 'DENY')
-        self.send_header('Content-Security-Policy', policy or "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+        self.status, self.body = status, body
+        self.response_headers = [
+            ('Content-Type', content_type), ('Content-Length', str(len(body))),
+            ('Cache-Control', 'no-store'), ('Referrer-Policy', 'no-referrer' if policy else 'strict-origin-when-cross-origin'),
+            ('X-Content-Type-Options', 'nosniff'), ('X-Frame-Options', 'DENY'),
+            ('Content-Security-Policy', policy or "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"),
+            ('Vary', 'Origin')]
         if disposition:
-            self.send_header('Content-Disposition', disposition)
-        self.end_headers()
-        self.wfile.write(body)
+            self.response_headers.append(('Content-Disposition', disposition))
+        origin = self.headers.get('Origin')
+        if origin and origin in self.server.origins():
+            self.response_headers.extend([('Access-Control-Allow-Origin', origin),
+                                          ('Access-Control-Expose-Headers', 'Content-Disposition')])
 
     def trusted_request(self):
-        port = self.server.server_address[1]
-        hosts = {f'127.0.0.1:{port}', f'localhost:{port}'}
-        if self.headers.get('Host') not in hosts:
-            self.reply(403, {'ok':False, 'error':'Open this service through localhost.'})
+        if self.headers.get('Host') not in self.server.hosts():
+            self.reply(403, {'ok':False, 'error':'Open this service through its configured address.'})
             return False
         origin = self.headers.get('Origin')
-        if origin and origin not in {'http://' + host for host in hosts}:
+        if origin and origin not in self.server.origins():
             self.reply(403, {'ok':False, 'error':'Cross-site requests are not allowed.'})
             return False
         return True
+
+    def do_OPTIONS(self):
+        if not self.trusted_request():
+            return
+        allowed_headers = {'content-type', 'accept', 'x-invitation-token', 'x-event-id',
+                           'x-material-kind', 'x-file-name', 'x-presentation-version'}
+        requested = {h.strip().lower() for h in self.headers.get('Access-Control-Request-Headers', '').split(',') if h.strip()}
+        if (not self.headers.get('Origin') or self.headers.get('Access-Control-Request-Method') not in ('GET', 'POST')
+                or not requested <= allowed_headers):
+            self.reply(403, {'ok':False, 'error':'This cross-site request is not allowed.'})
+            return
+        self.reply(204, b'', 'text/plain')
+        self.response_headers.extend([('Access-Control-Allow-Methods', 'GET, POST'),
+                                      ('Access-Control-Allow-Headers', ', '.join(sorted(allowed_headers))),
+                                      ('Access-Control-Max-Age', '600')])
 
     def event_store(self, request):
         event_id = request.get('event_id', 'seminar-1')
@@ -294,10 +331,10 @@ class Handler(BaseHTTPRequestHandler):
         elif route == '/config.json':
             self.reply(200, self.server.config)
         else:
-            files = {'/':'index.html','/index.html':'index.html','/event.html':'event.html', '/home.js':'home.js', '/shared.js':'shared.js',
+            files = {'/':'index.html','/index.html':'index.html','/event.html':'event.html', '/home.js':'home.js', '/api.js':'api.js', '/shared.js':'shared.js',
                      '/about.html':'about.html','/about.js':'about.js',
                      '/agenda.html':'agenda.html','/agenda.js':'agenda.js',
-                     '/styles.css':'styles.css','/app.js':'app.js','/admin':'admin.html','/admin.js':'admin.js',
+                     '/styles.css':'styles.css','/app.js':'app.js','/admin':'admin.html','/admin.html':'admin.html','/admin.js':'admin.js',
                      '/assets/d3.svg':'assets/d3.svg','/assets/uni-wuerzburg.svg':'assets/uni-wuerzburg.svg',
                      '/assets/agenda-paper.svg':'assets/agenda-paper.svg'}
             filename = files.get(route)
@@ -351,7 +388,10 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(request, dict):
                 raise ValueError('Invalid request.')
             store = self.event_store(request)
-            if route == '/api/public-presentations':
+            if route == '/api/public-event':
+                config = seminar.event_config(self.server.config, request.get('event_id'))
+                self.reply(200, dict(ok=True, **store.public_event(seminar.poll_data(config))))
+            elif route == '/api/public-presentations':
                 with store.connect() as connection:
                     connection.execute('BEGIN')
                     self.reply(200, dict(ok=True, presentations=presentations.listing(store, connection)))
@@ -390,10 +430,14 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.organizer.save_programme(request['event_id'], request['programme'], request['snapshot'])
                     self.reply(200, dict(ok=True))
                 elif request.get('action') == 'preview_mail':
-                    self.reply(200, dict(ok=True, **self.server.organizer.preview_mail(request['event_id'], request['kind'])))
-                elif request.get('action') == 'send_mail':
-                    result = self.server.organizer.send_mail(request['event_id'], request['kind'], request['preview'], request.get('password'))
-                    self.reply(503 if result.get('error') else 200, dict(ok=not bool(result.get('error')), **result))
+                    result = self.server.organizer.preview_mail(request.get('mail_event', request.get('event_id', 'next')), request['kind'])
+                    self.reply(200, dict(ok=True, **result))
+                elif request.get('action') == 'claim_mail':
+                    result = self.server.organizer.claim_mail(request['event_id'], request['kind'], request['participant_id'], request['preview'], request['message_id'])
+                    self.reply(200, dict(ok=True, **result))
+                elif request.get('action') == 'finish_mail':
+                    self.server.organizer.finish_mail(request['event_id'], request['participant_id'], request['key'], request['message_id'])
+                    self.reply(200, dict(ok=True))
                 else:
                     raise ValueError('Unknown admin action.')
             else:
@@ -410,31 +454,73 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(503, {'ok':False, 'error':'The event files could not be read or saved. Check the local setup and restart the server before retrying.'})
 
 
-def create_server(port=8765, store=None, config=None, admin_secret=None, config_file=None):
-    config = config or seminar.load_config()
-    server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
-    server.store = store or Store(seminar.PRIVATE / 'responses.sqlite3')
-    server.stores = {'seminar-1': server.store}
-    for event in config.get('events', []):
-        seminar.event_config(config, event['id'])
-        if event['id'] != 'seminar-1':
-            server.stores[event['id']] = Store(server.store.database.parent / 'events' / event['id'] / 'responses.sqlite3')
-    server.config = config
-    server.admin_secret = admin_secret or seminar.settings()['admin_secret']
-    config_file = config_file or (store.database.parent / 'config.json' if store else seminar.CONFIG)
-    if not config_file.exists():
-        write_config(config_file, config)
-    server.organizer = Organizer(config, server.stores, config_file, server.store.database.parent)
+def origins_for(base):
+    url = urlparse(base)
+    origins = {url.scheme + '://' + url.netloc}
+    if url.scheme == 'http' and url.hostname in {'localhost', '127.0.0.1'}:
+        suffix = ':' + str(url.port) if url.port else ''
+        origins.update('http://' + host + suffix for host in ('localhost', '127.0.0.1'))
+    return origins
+
+
+class Application:
+    def __init__(self, store=None, config=None, admin_secret=None, config_file=None, public_url=None):
+        self.config = config or seminar.load_config()
+        self.public_url = public_url or self.config.get('api_url')
+        if self.public_url:
+            seminar.validate_api_url(self.public_url)
+        seminar.validate_site_url(self.config['site_url'])
+        self.store = store or Store(seminar.PRIVATE / 'responses.sqlite3')
+        self.stores = {'seminar-1':self.store}
+        for event in self.config.get('events', []):
+            seminar.event_config(self.config, event['id'])
+            if event['id'] != 'seminar-1':
+                self.stores[event['id']] = Store(self.store.database.parent / 'events' / event['id'] / 'responses.sqlite3')
+        self.admin_secret = admin_secret or seminar.settings()['admin_secret']
+        config_file = config_file or (store.database.parent / 'config.json' if store else seminar.CONFIG)
+        if not config_file.exists():
+            write_config(config_file, self.config)
+        self.organizer = Organizer(self.config, self.stores, config_file, self.store.database.parent)
+
+    def hosts(self):
+        hosts = {f'localhost:{self.port}', f'127.0.0.1:{self.port}'}
+        if self.public_url:
+            hosts.update(urlparse(origin).netloc for origin in origins_for(self.public_url))
+        return hosts
+
+    def origins(self):
+        origins = origins_for(self.config['site_url'])
+        origins.update('http://' + host for host in self.hosts() if host.startswith(('localhost:', '127.0.0.1:')))
+        if self.public_url:
+            origins.update(origins_for(self.public_url))
+        return origins
+
+    def __call__(self, environ, start_response):
+        handler = Handler(self, environ)
+        method = environ['REQUEST_METHOD']
+        if method in ('GET', 'POST', 'OPTIONS'):
+            getattr(handler, 'do_' + method)()
+        else:
+            handler.reply(405, {'ok':False, 'error':'Method not allowed.'})
+            handler.response_headers.append(('Allow', 'GET, POST, OPTIONS'))
+        start_response(f'{handler.status} {HTTPStatus(handler.status).phrase}', handler.response_headers)
+        return [handler.body]
+
+
+def create_server(port=8765, store=None, config=None, admin_secret=None, config_file=None, host='127.0.0.1', public_url=None):
+    app = Application(store, config, admin_secret, config_file, public_url)
+    server = waitress_server(app, host=host, port=port, threads=4, max_request_body_size=presentations.MAX_FILE_SIZE,
+                             channel_timeout=30, clear_untrusted_proxy_headers=True)
+    app.port = int(server.effective_port)
+    server.d3_app = app
     return server
 
 
 if __name__ == '__main__':
-    server = create_server()
-    print('D3 seminar is running at http://127.0.0.1:8765/', flush=True)
-    print('Responses for each event are stored privately under .private/. Press Ctrl+C to stop.', flush=True)
+    server = create_server(port=int(os.environ.get('D3_PORT', '8765')), host=os.environ.get('D3_BIND_HOST', '127.0.0.1'))
+    print('D3 seminar API is running with Waitress.', flush=True)
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
+        server.run()
     finally:
-        server.server_close()
+        server.task_dispatcher.shutdown()
+        server.close()

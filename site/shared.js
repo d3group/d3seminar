@@ -1,3 +1,4 @@
+import {apiFetch} from './api.js';
 export function selectEvent(config, id = 'seminar-1') {
   const event = config.events.find(event => event.id === id);
   if (!event) throw new Error('This event could not be found. Return to the programme to choose an event.');
@@ -198,7 +199,7 @@ export function renderProgramme(container, programme = {}, heading = 'h4') {
 export async function loadProgramme(config, token, includeVotes = false, includePresentations = false) {
   return Promise.all(config.events.map(async event => {
     try {
-      const response = await fetch('/api/invitation', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token, event_id:event.id, include_votes:includeVotes, include_presentations:includePresentations})});
+      const response = await apiFetch('invitation', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token, event_id:event.id, include_votes:includeVotes, include_presentations:includePresentations})});
       const invitation = await response.json();
       if (!response.ok || !invitation.ok) throw new Error(invitation.error || 'Invitation unavailable.');
       return {event, invitation};

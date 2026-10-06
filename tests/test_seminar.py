@@ -4,10 +4,11 @@ import copy
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location('seminar', Path(__file__).parents[1] / 'scripts/seminar.py')
 seminar = importlib.util.module_from_spec(SPEC)
@@ -39,8 +40,6 @@ class SeminarTests(unittest.TestCase):
         return dict(id=invite['id'], email=invite['email'], revision=invite['revision'],
                     token_hash=seminar.digest(invite['token']), answers={slot['id']:'available' for slot in CONFIG['slots']} if status == 'confirmed' else {}, updated_at=updated, comment='')
 
-    def args(self, kind='invite', send=False):
-        return argparse.Namespace(kind=kind, send=send, to=ADDRESS, all=False)
 
     def test_preparing_again_preserves_tokens_and_delivery_history(self):
         records = self.invites()
@@ -107,63 +106,22 @@ class SeminarTests(unittest.TestCase):
         self.assertIn(b'DTSTART:20261009T120000Z', attachments[0].get_payload(decode=True))
         self.assertIn(b'DTEND:20261009T140000Z', attachments[0].get_payload(decode=True))
 
-    def test_only_student_emails_link_directly_to_the_presentation_form(self):
+    def test_timing_emails_and_student_presentation_nudges_are_separate(self):
         for role in ('student', 'professor', ''):
+            invite = dict(self.invites()[0], role=role)
             for kind in ('invite', 'remind', 'confirm'):
-                with self.subTest(role=role, kind=kind):
-                    invite = dict(self.invites()[0], role=role)
-                    mail = seminar.message(CONFIG, seminar.settings(), invite, kind,
-                                           {'final_event':seminar.event_data(CONFIG, CONFIG['slots'][0])})
-                    plain = mail.get_body(preferencelist=('plain',)).get_content()
-                    rich = mail.get_body(preferencelist=('html',)).get_content()
-                    if role == 'student':
-                        self.assertIn('agenda.html?present=seminar-1#token=' + invite['token'], plain)
-                        self.assertIn('at least one of the three seminars and for the onsite', plain)
-                        self.assertIn('>Add your presentation</a>', rich)
-                    else:
-                        self.assertNotIn('agenda.html?present=', plain)
-                        self.assertNotIn('Add your presentation', rich)
-
-    def test_dry_run_never_connects_to_smtp(self):
-        with patch.object(seminar.smtplib, 'SMTP_SSL') as smtp:
-            seminar.send(self.args())
-            smtp.assert_not_called()
-        self.assertEqual(len(list((seminar.PRIVATE / 'outbox').glob('*.eml'))), 1)
-        self.assertEqual(self.invites()[0]['deliveries'], {})
-
-    def test_send_is_individual_and_not_repeated(self):
-        invite = self.invites()[0]
-        smtp = MagicMock()
-        with patch.object(seminar, 'backend', return_value={'records': [self.remote(invite)], 'state':{}}), \
-             patch.object(seminar.getpass, 'getpass', return_value='test-password'), \
-             patch.object(seminar.smtplib, 'SMTP_SSL', return_value=smtp):
-            seminar.send(self.args(send=True))
-            seminar.send(self.args(send=True))
-        client = smtp.__enter__.return_value
-        client.login.assert_called_once_with('jmu-user', 'test-password')
-        client.send_message.assert_called_once()
-        self.assertEqual(client.send_message.call_args.kwargs['to_addrs'], [ADDRESS])
-        self.assertEqual(self.invites()[0]['deliveries']['invite:' + invite['revision']]['status'], 'sent')
-
-    def test_ambiguous_smtp_failure_is_not_retried_automatically(self):
-        invite = self.invites()[0]
-        smtp = MagicMock()
-        smtp.__enter__.return_value.send_message.side_effect = OSError('connection lost')
-        with patch.object(seminar, 'backend', return_value={'records': [self.remote(invite)], 'state':{}}), \
-             patch.object(seminar.getpass, 'getpass', return_value='test-password'), \
-             patch.object(seminar.smtplib, 'SMTP_SSL', return_value=smtp):
-            with self.assertRaises(OSError):
-                seminar.send(self.args(send=True))
-            seminar.send(self.args(send=True))
-        smtp.__enter__.return_value.send_message.assert_called_once()
-        self.assertEqual(self.invites()[0]['deliveries']['invite:' + invite['revision']]['status'], 'attempted')
-
-    def test_remote_mismatch_blocks_mail_before_smtp(self):
-        with patch.object(seminar, 'backend', return_value={'records': []}), \
-             patch.object(seminar.smtplib, 'SMTP_SSL') as smtp:
-            with self.assertRaisesRegex(ValueError, 'Run sync'):
-                seminar.send(self.args(send=True))
-            smtp.assert_not_called()
+                mail = seminar.message(CONFIG, seminar.settings(), invite, kind,
+                    {'final_event':seminar.event_data(CONFIG, CONFIG['slots'][0])})
+                self.assertNotIn('agenda.html?present=', mail.get_body(preferencelist=('plain',)).get_content())
+            if role != 'student':
+                with self.assertRaises(ValueError):
+                    seminar.message(CONFIG, seminar.settings(), invite, 'present')
+            else:
+                mail = seminar.message(CONFIG, seminar.settings(), invite, 'present', later=[dict(id='seminar-2', name='Seminar 2')])
+                plain = mail.get_body(preferencelist=('plain',)).get_content()
+                self.assertIn('agenda.html?present=seminar-1#token=', plain)
+                self.assertIn('provisional title', plain)
+                self.assertIn('Reserve Seminar 2</a>', mail.get_body(preferencelist=('html',)).get_content())
 
     def test_reminder_and_confirmation_target_correct_states(self):
         invite = self.invites()[0]
@@ -189,25 +147,32 @@ class SeminarTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Finalize'):
             seminar.message(CONFIG, seminar.settings(), self.invites()[0], 'confirm')
 
-    def test_response_arriving_during_password_prompt_skips_reminder(self):
-        invite = self.invites()[0]
-        invite['deliveries']['invite:' + invite['revision']] = dict(status='sent')
-        seminar.save_private(seminar.PRIVATE / 'invitations.json', [invite])
-        pending = {invite['id']:self.remote(invite)}
-        done = {invite['id']:self.remote(invite, 'confirmed')}
-        with patch.object(seminar, 'get_responses', side_effect=[pending, done]), \
-             patch.object(seminar, 'backend', return_value={'state':{}}), \
-             patch.object(seminar.getpass, 'getpass', return_value='test-password'), \
-             patch.object(seminar.smtplib, 'SMTP_SSL') as smtp:
-            seminar.send(self.args(kind='remind', send=True))
-        smtp.return_value.__enter__.return_value.send_message.assert_not_called()
 
     def test_backend_cannot_send_admin_secret_to_another_host(self):
         local = seminar.settings()
         local['local_base_url'] = 'https://example.com/'
         seminar.save_private(seminar.PRIVATE / 'settings.json', local)
-        with self.assertRaisesRegex(ValueError, 'local backend'):
+        with self.assertRaisesRegex(ValueError, 'D3_API_URL'):
             seminar.backend(CONFIG, 'responses')
+
+    def test_container_public_url_overrides_local_links_without_changing_mail_settings(self):
+        before = seminar.settings()
+        with patch.dict(os.environ, {'D3_SITE_URL':'http://localhost:8080/'}):
+            config = seminar.load_config()
+        self.assertEqual(config['site_url'], 'http://localhost:8080/')
+        self.assertEqual(config['backend_url'], 'http://localhost:8080/api/respond')
+        self.assertEqual(seminar.settings(), before)
+        for value in ['http://outside.example/', 'http://localhost:8080/#token=bad']:
+            with self.subTest(value=value), patch.dict(os.environ, {'D3_SITE_URL':value}):
+                with self.assertRaises(ValueError):
+                    seminar.load_config()
+
+    def test_pages_and_api_addresses_can_be_configured_independently(self):
+        with patch.dict(os.environ, {'D3_SITE_URL':'https://d3group.github.io/d3seminar/', 'D3_API_URL':'https://seminar-api.example.org/'}):
+            config = seminar.load_config()
+        self.assertEqual(config['site_url'], 'https://d3group.github.io/d3seminar/')
+        self.assertEqual(config['api_url'], 'https://seminar-api.example.org/')
+        self.assertEqual(config['backend_url'], 'https://seminar-api.example.org/api/respond')
 
     def test_events_share_the_personal_link_but_keep_deliveries_separate(self):
         first = self.invites()[0]
@@ -221,8 +186,7 @@ class SeminarTests(unittest.TestCase):
             self.assertNotEqual(second['revision'], first['revision'])
             self.assertEqual(second['deliveries'], {})
             self.assertIn('event=seminar-2#token=', seminar.invitation_url(config, second))
-            seminar.send(self.args())
-            self.assertEqual(len(list((seminar.PRIVATE / 'events/seminar-2/outbox').glob('*.eml'))), 1)
+            self.assertIn('event=seminar-2#token=', seminar.message(config, seminar.settings(), second, 'invite').get_body(preferencelist=('plain',)).get_content())
         self.assertEqual(self.invites()[0], first)
 
     def test_onsite_mail_and_calendar_cover_both_dates(self):

@@ -90,9 +90,17 @@ try {
   await option().click();
   assert.equal(await form().count(), 0);
   assert.equal(await card.locator('.calendar-option-half').count(), 1);
+  await page.goto(details.base + '?event=onsite');
+  await card.locator('.calendar-option.date-confirmed').waitFor();
+  assert.equal(await card.locator('.calendar-option').count(), 1);
+  assert.equal(await card.locator('.calendar-option-half').count(), 1);
+  await card.locator('button.calendar-date:enabled').first().click();
+  await card.getByText('1 of 1 available', {exact:true}).waitFor();
+  assert.equal(await card.locator('.calendar-response-form, .vote-people, .vote-ring').count(), 0);
   await page.route('**/config.json', async route => {
     const response = await route.fetch();
     const config = await response.json();
+    config.backend_url = '';
     config.events.find(event => event.id === 'onsite').slots = [
       {id:'week-wrap', start:'2027-04-18T09:00:00+02:00', end:'2027-04-20T13:00:00+02:00'},
       {id:'month-wrap', start:'2027-04-30T09:00:00+02:00', end:'2027-05-02T13:00:00+02:00'}

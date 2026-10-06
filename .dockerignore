@@ -1,0 +1,12 @@
+**
+!site/
+!site/**
+!scripts/
+!scripts/*.py
+!requirements.txt
+!docker/
+!docker/**
+**/__pycache__/
+**/*.pyc
+**/.DS_Store
+**/*.md

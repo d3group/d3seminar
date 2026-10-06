@@ -280,6 +280,24 @@ try {
   assert.match(await page.locator('#presentation-nudge').textContent(), /Onsite proposal: to add/);
   assert.equal(await page.locator('[data-event="onsite"] .talk-row').count(), 0);
   assert.equal(await page.locator('[data-event="onsite"] .agenda-open-slot').count(), 2);
+  await page.goto(details.base + 'agenda.html?present=seminar-3&placeholder=1#token=' + 'T'.repeat(43));
+  await page.locator('#presentation-editor').waitFor();
+  assert.equal(await page.locator('#talk-placeholder').isChecked(), true);
+  assert.equal(await page.getByRole('radio', {name:'Public', exact:true}).isDisabled(), true);
+  await page.getByRole('button', {name:'Save talk', exact:true}).click();
+  assert.equal(await page.locator('#talk-title').evaluate(input => input.validity.valueMissing), true);
+  await page.locator('#talk-title').fill('Provisional: learning with limited data');
+  await page.getByRole('button', {name:'Save talk', exact:true}).click();
+  await page.getByRole('heading', {name:'Your placeholder is saved.', exact:true}).waitFor();
+  await page.reload();
+  await page.locator('#presentation-editor').waitFor();
+  assert.equal(await page.locator('#talk-placeholder').isChecked(), true);
+  assert.equal(await page.locator('#talk-title').inputValue(), 'Provisional: learning with limited data');
+  assert.match(await page.locator('[data-event="seminar-3"] .talk-row').textContent(), /Provisional title/);
+  await page.locator('#talk-placeholder').uncheck();
+  await page.getByRole('button', {name:'Save talk', exact:true}).click();
+  await page.getByRole('heading', {name:'Your talk is saved.', exact:true}).waitFor();
+  assert.equal(await page.getByRole('radio', {name:'Public', exact:true}).isDisabled(), false);
   assert.deepEqual(errors, []);
   console.log('Presentation checks passed: persistent save confirmation, author timings and totals, event cards, draft recovery, upload failures, private editing, public names only, protected files and mobile layout.');
 } finally {

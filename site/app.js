@@ -1,7 +1,8 @@
+import {apiFetch, loadConfig, apiUrl} from './api.js';
 import {selectEvent, slotLabel, durationLabel, dailyHoursLabel, preserveInvitationLinks, eventHref, answeredCount, eventFinished, nextEvent, loadProgramme, programmeProgress, showSavedResponse, renderProgramme} from './shared.js';
 preserveInvitationLinks(new URLSearchParams(location.hash.slice(1)).get('token'));
 const $ = id => document.getElementById(id);
-let config, poll, token, programme = [], demo = false, saving = false;
+let config, poll, token, programme = [], saving = false;
 const eventId = new URLSearchParams(location.search).get('event') || 'seminar-1';
 const choices = [['available', 'Available'], ['unavailable', 'Unavailable']];
 const fmt = (value, options) => new Intl.DateTimeFormat('en-GB', {timeZone:poll.timezone, ...options}).format(new Date(value));
@@ -17,7 +18,7 @@ function notice(message, error = false) {
 function progress(edited = false) {
   const answered = $('poll-options').querySelectorAll('input:checked').length;
   $('answer-progress').textContent = `${answered} of ${poll.slots.length} options answered. ${answered < poll.slots.length ? 'You can save now and finish later.' : 'Ready to save.'}`;
-  if (edited && !demo) {
+  if (edited) {
     $('status-pill').textContent = 'Unsaved changes';
     $('saved-response').hidden = true;
   }
@@ -50,10 +51,6 @@ function renderJourney() {
 
 async function saveResponse(event) {
   event.preventDefault();
-  if (demo) {
-    $('response-form').hidden = true; $('demo-receipt').hidden = false;
-    notice('Preview complete · Nothing was saved.'); return;
-  }
   if (saving) return;
   const advance = event.submitter?.value !== 'stay';
   const form = $('response-form');
@@ -64,7 +61,7 @@ async function saveResponse(event) {
   try {
     let response, saved;
     try {
-      response = await fetch(form.action, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded', Accept:'application/json'}, body});
+      response = await apiFetch('respond', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded', Accept:'application/json'}, body});
       saved = await response.json();
     } catch {
       throw new Error('Could not confirm the save. Your answers are still here. Please try saving again.');
@@ -124,21 +121,9 @@ function renderPoll(answers = {}) {
   progress();
 }
 
-function showDemo() {
-  demo = true;
-  $('status-pill').textContent = 'Demo';
-  $('greeting').textContent = 'Try the poll. This preview does not save anything.';
-  $('response-form').hidden = false;
-  $('preview-actions').hidden = true;
-  $('demo-receipt').hidden = true;
-  $('submit-button').textContent = 'Preview my availability';
-  $('save-later').hidden = true;
-  notice('Demo mode · No response will be stored.');
-}
-
 async function calendar() {
   try {
-    const response = await fetch('/api/calendar', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token, event_id:eventId})});
+    const response = await apiFetch('calendar', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token, event_id:eventId})});
     if (!response.ok) throw new Error('The calendar could not be downloaded. Please reload and try again.');
     const link = document.createElement('a');
     link.href = URL.createObjectURL(await response.blob()); link.download = 'd3-seminar.ics'; link.click();
@@ -147,9 +132,12 @@ async function calendar() {
 }
 
 async function start() {
-  const response = await fetch('config.json', {cache:'no-store'});
-  if (!response.ok) throw new Error('The seminar details could not be loaded. Please try again.');
-  config = selectEvent(await response.json(), eventId); poll = config;
+  token = new URLSearchParams(location.hash.slice(1)).get('token');
+  if (!token) {
+    location.replace('./?' + new URLSearchParams({event:eventId}));
+    return;
+  }
+  config = selectEvent(await loadConfig(), eventId); poll = config;
   document.title = config.name + ' · ' + config.semester;
   $('event-semester').textContent = config.semester;
   $('event-title').textContent = config.name;
@@ -161,12 +149,9 @@ async function start() {
     $('all-available').textContent = 'All onsite options work';
     $('all-unavailable').textContent = 'None of these work';
   }
-  const params = new URLSearchParams(location.hash.slice(1)); token = params.get('token');
   const home = './' + (token ? '#' + new URLSearchParams({token}) : '');
   $('back-home').href = home; document.querySelector('.brand').href = home;
   $('calendar').addEventListener('click', calendar);
-  $('demo-button').addEventListener('click', showDemo);
-  $('demo-reset').addEventListener('click', showDemo);
   $('response-form').addEventListener('input', () => progress(true));
   for (const answer of ['available', 'unavailable']) {
     $(`all-${answer}`).addEventListener('click', () => {
@@ -174,17 +159,7 @@ async function start() {
     });
   }
   $('response-form').addEventListener('submit', saveResponse);
-  if (!token) {
-    renderPoll(); notice('Open the personal link in your invitation email to save your availability.');
-    $('preview-actions').hidden = false;
-    if (params.get('demo') === '1') showDemo();
-    return;
-  }
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('This invitation link is incomplete. Please open the full link from your email.');
-  const backend = config.backend_url ? new URL(config.backend_url) : null;
-  if (!backend || backend.origin !== location.origin || backend.pathname !== '/api/respond') {
-    throw new Error('Responses are not open on this site yet. Please reply to your invitation email.');
-  }
   programme = await loadProgramme(config, token);
   const current = programme.find(entry => entry.event.id === eventId);
   const invitation = current.invitation;
@@ -193,7 +168,7 @@ async function start() {
   // Read current options from the backend, so existing email links survive a new round.
   poll = invitation.poll; renderPoll(invitation.answers);
   $('greeting').textContent = `Hello ${invitation.name}. Please mark all the times that work for you.`;
-  $('response-form').action = config.backend_url;
+  $('response-form').action = apiUrl('respond');
   $('token').value = token; $('revision').value = invitation.revision;
   $('comment').value = invitation.comment;
   const state = invitation.state;

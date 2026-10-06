@@ -1,8 +1,13 @@
 .private/
+/data/
+/backups/
+/.venv/
+/.mailer/
 /vault/
 .env
 .env.*
 !.env.example
+!.env.production.example
 .clasp.json
 node_modules/
 __pycache__/

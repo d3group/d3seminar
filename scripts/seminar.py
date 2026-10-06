@@ -4,7 +4,6 @@
 import argparse
 import csv
 import fcntl
-import getpass
 import hashlib
 import html
 import json
@@ -12,20 +11,18 @@ import os
 from pathlib import Path
 import re
 import secrets
-import smtplib
-import ssl
 import subprocess
 import sys
 from datetime import datetime, time, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
 from urllib.parse import urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
-PRIVATE = ROOT / '.private'
-CONFIG = ROOT / 'site' / 'config.json'
+PRIVATE = Path(os.environ.get('D3_DATA_DIR', ROOT / '.private'))
+CONFIG = Path(os.environ.get('D3_CONFIG', ROOT / 'site' / 'config.json'))
 EVENT_ID = None
 EMAIL_PATTERN = r'[^\s@<>\r\n]+@[^\s@<>\r\n]+\.[^\s@<>\r\n]+'
 GROUP_SIZES = {'professor':5, 'student':15}
@@ -190,7 +187,7 @@ def when(slot, timezone_name, daily_hours=None):
     return f'{start:%A, %d %B %Y}, {start:%H:%M}–{end:%H:%M} ({timezone_name})'
 
 
-def calendar_bytes(event):
+def calendar_bytes(event, created_at=None):
     def stamp(value):
         return value.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     def escape(value):
@@ -208,7 +205,8 @@ def calendar_bytes(event):
             sessions.append((f'{event["campaign_id"]}-day-{index + 1}', start, end, f'{event["title"]} (day {index + 1})'))
     lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//D3//Seminar//EN']
     for uid, start, end, title in sessions:
-        lines.extend(['BEGIN:VEVENT', f'UID:{uid}@d3seminar', f'DTSTAMP:{stamp(datetime.now(timezone.utc))}',
+        created = datetime.fromisoformat(created_at) if created_at else datetime.now(timezone.utc)
+        lines.extend(['BEGIN:VEVENT', f'UID:{uid}@d3seminar', f'DTSTAMP:{stamp(created)}',
                       f'DTSTART:{stamp(start)}', f'DTEND:{stamp(end)}', f'SUMMARY:{escape(title)}',
                       f'LOCATION:{escape(event["location"])}'])
         programme = event.get('programme', {})
@@ -230,24 +228,44 @@ def calendar_bytes(event):
     return '\r\n'.join(folded).encode()
 
 
+def validate_site_url(base):
+    if not isinstance(base, str) or any(c.isspace() for c in base) or '\\' in base:
+        raise ValueError('Use a valid website URL.')
+    url = urlparse(base)
+    local = url.scheme == 'http' and url.hostname in ('127.0.0.1', 'localhost')
+    if (url.scheme != 'https' and not local) or not url.hostname or url.username is not None or url.password is not None or url.query or url.fragment or not url.path.endswith('/'):
+        raise ValueError('site_url must be HTTPS, or HTTP on localhost, and end with /.')
+    if url.port is not None and not 1 <= url.port <= 65535:
+        raise ValueError('Invalid URL port.')
+    return base
+
+
+def validate_api_url(base):
+    validate_site_url(base)
+    if urlparse(base).path != '/':
+        raise ValueError('api_url must use the backend root and end with /.')
+    return base
+
+
 def load_config():
     programme = read_json(CONFIG)
     for event in programme.get('events', []):
         validate_poll(poll_data(event_config(programme, event['id'])))
     config = event_config(programme, EVENT_ID)
     local_file = PRIVATE / 'settings.json'
-    if local_file.exists():
-        base = read_json(local_file).get('local_base_url')
-        if base:
-            config['site_url'] = base
-            config['backend_url'] = base + 'api/respond'
+    site = os.environ.get('D3_SITE_URL')
+    if not site and local_file.exists():
+        site = read_json(local_file).get('local_base_url')
+    config['site_url'] = validate_site_url(site or config['site_url'])
+    api = os.environ.get('D3_API_URL') or (site if site else config.get('api_url'))
+    if not api and config.get('backend_url'):
+        api = config['backend_url'].removesuffix('api/respond')
+    if api:
+        config['api_url'] = validate_api_url(api)
+        config['backend_url'] = api + 'api/respond'
     if not isinstance(config.get('test_mode'), bool):
         raise ValueError('Set test_mode explicitly to true or false.')
     validate_poll(poll_data(config))
-    url = urlparse(config['site_url'])
-    local = url.scheme == 'http' and url.hostname in ('127.0.0.1', 'localhost')
-    if (url.scheme != 'https' and not local) or not url.netloc or url.query or url.fragment or not url.path.endswith('/'):
-        raise ValueError('site_url must be HTTPS, or HTTP on localhost, and end with /.')
     return config
 
 
@@ -336,14 +354,22 @@ def load_invitations(config):
     return records
 
 
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError('The API redirected. Set D3_API_URL to its final HTTPS address.')
+
+
 def backend(config, action, **data):
-    base = settings().get('local_base_url', '')
-    url = urlparse(base)
-    if url.scheme != 'http' or url.hostname not in ('127.0.0.1', 'localhost') or url.path != '/':
-        raise ValueError('Configure the local backend with configure --local first.')
+    base = os.environ.get('D3_API_URL')
+    if not base:
+        base = settings().get('local_base_url', '')
+        url = urlparse(base)
+        if url.scheme != 'http' or url.hostname not in ('127.0.0.1', 'localhost'):
+            raise ValueError('Set D3_API_URL explicitly for a hosted backend.')
+    validate_api_url(base)
     payload = dict(action=action, event_id=config.get('event_id', 'seminar-1'), secret=settings()['admin_secret'], **data)
     request = Request(base + 'api/admin', data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
-    with urlopen(request, timeout=40) as response:
+    with build_opener(NoRedirect).open(request, timeout=40) as response:
         try:
             result = json.load(response)
         except ValueError as error:
@@ -385,35 +411,39 @@ def status(args):
         print(f'{invite["name"]}: {count}/{len(config["slots"])} options answered')
         if response['comment']:
             print('  ' + response['comment'].replace('\n', '\n  '))
-    print('A private snapshot is saved in ' + str(event_private(config).relative_to(ROOT) / 'responses.json') + '.')
+    print('A private snapshot is saved in ' + str(event_private(config) / 'responses.json') + '.')
 
 
 def open_page(args):
     config = load_config()
     if args.command == 'admin':
-        url = config['site_url'] + 'admin?' + urlencode(dict(event=config.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(key=settings()['admin_secret']))
+        url = config['site_url'] + 'admin.html?' + urlencode(dict(event=config.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(key=settings()['admin_secret']))
     else:
         invite = next(item for item in load_invitations(config) if item['email'] == settings()['test_recipient'])
         url = config['site_url'] + '#' + urlencode(dict(token=invite['token'])) if args.command == 'home' else invitation_url(config, invite)
-    subprocess.run(['open', url], check=True)
+    if getattr(args, 'print_url', False):
+        print(url)
+    else:
+        subprocess.run(['open', url], check=True)
 
 
 def invitation_url(config, invite):
     return config['site_url'] + 'event.html?' + urlencode(dict(event=config.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(token=invite['token']))
 
 
-def message(config, local, invite, kind, state=None):
+def message(config, local, invite, kind, state=None, later=None):
     poll = invite['poll']
     state = state or {}
     wording = {
         'invite': ('Find a time for our seminar', 'Please mark your availability for each option. We are looking for one time when everyone can attend.'),
         'remind': ('Reminder: your seminar availability', 'Please finish marking your availability so we can find a time for everyone.'),
         'confirm': ('Our seminar time is confirmed', 'Everyone has confirmed their availability. Our seminar will take place at the time below.'),
+        'present': ('Bring your research to our next seminar', 'Please add a talk for our next seminar. Work in progress, an early result, or a question you would like feedback on is welcome.'),
     }
     if kind not in wording:
-        raise ValueError('Choose invitations, reminders or final confirmations.')
+        raise ValueError('Choose invitations, reminders, presentation nudges or final confirmations.')
     subject, introduction = wording[kind]
-    series = poll['title'] + (' · ' + config['semester'] if config.get('semester') else '')
+    series = config.get('name', poll['title']) + (' · ' + config['semester'] if config.get('semester') else '')
     if config.get('kind') == 'onsite':
         subject = subject.replace('seminar', 'onsite meeting')
         introduction = introduction.replace('seminar', 'onsite meeting')
@@ -421,7 +451,7 @@ def message(config, local, invite, kind, state=None):
             hours = poll.get('daily_hours')
             timing = f', {daily_hours_label(hours)}' if hours else ''
             introduction += f' Each option covers {poll["duration_days"]} consecutive dates{timing}. Please respond for the whole meeting.'
-    if kind == 'confirm':
+    if kind == 'confirm' or kind == 'present' and state.get('final_event'):
         event = state.get('final_event')
         if not event:
             raise ValueError('Finalize a time for everyone before sending confirmations.')
@@ -431,14 +461,27 @@ def message(config, local, invite, kind, state=None):
     else:
         details = '\n'.join(when(slot, poll['timezone'], poll.get('daily_hours')) for slot in poll['slots'])
     deadline = datetime.fromisoformat(poll['deadline']).astimezone(ZoneInfo(poll['timezone']))
-    due = '' if kind == 'confirm' else f'Please respond by {deadline:%A, %d %B, %H:%M} ({poll["timezone"]}).\n\n'
+    due = '' if kind in {'confirm', 'present'} else f'Please respond by {deadline:%A, %d %B, %H:%M} ({poll["timezone"]}).\n\n'
     test_note = 'This is an MVP test sent only to you. All dates below are test options.\n\n' if config['test_mode'] else ''
     presentation_url = config['site_url'] + 'agenda.html?' + urlencode(dict(present=config.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(token=invite['token']))
-    presentation_note = ('Please add a talk title and abstract for at least one of the three seminars and for the onsite. '
-                         'You can add explainers and slides later.\nAdd your presentation:\n' + presentation_url + '\n\n') if invite.get('role') == 'student' else ''
+    presentation_note = ''
+    if kind == 'present':
+        if invite.get('role') != 'student':
+            raise ValueError('Presentation nudges are for students only.')
+        presentation_note = ('Start with a title; your abstract, explainer and slides can follow later.\nAdd your presentation:\n' + presentation_url + '\n\n')
+        if later:
+            presentation_note += 'Not ready for the next seminar? Reserve a later seminar with a provisional title. You can develop it into a full talk later.\n'
+            for event in later:
+                link = config['site_url'] + 'agenda.html?' + urlencode(dict(present=event['id'], placeholder='1')) + '#' + urlencode(dict(token=invite['token']))
+                presentation_note += event['name'] + ': ' + link + '\n'
+            presentation_note += '\n'
+        else:
+            presentation_note += 'If you cannot present at this seminar, please contact me to plan a contribution.\n\n'
+        presentation_note += 'Plan to contribute at least once across the three seminars and at the onsite meeting.\n\n'
     body = (f'Hello {invite["name"]},\n\n{test_note}{introduction}\n\n{series}\n{details}\n'
-            f'{state["final_event"]["location"] if kind == "confirm" else poll["location"]}\n\n{due}Open your personal invitation:\n'
-            f'{invitation_url(config, invite)}\n\n{presentation_note}Please keep your personal links private; anyone with them can update your responses and presentations.\n\n'
+            f'{state["final_event"]["location"] if kind == "confirm" else poll["location"]}\n\n{due}'
+            + (presentation_note if kind == 'present' else f'Open your personal invitation:\n{invitation_url(config, invite)}\n\n')
+            + 'Please keep your personal links private; anyone with them can update your responses and presentations.\n\n'
             f'Best,\n{local["sender_name"]}\n\nPlease send any comments or suggestions to {local["sender_email"]}.\n')
     mail = EmailMessage()
     mail['From'] = formataddr((local['sender_name'], local['sender_email']))
@@ -451,17 +494,20 @@ def message(config, local, invite, kind, state=None):
         '<a href="' + html.escape(invitation_url(config, invite), quote=True) + '">Open your personal invitation</a>')
     if presentation_note:
         safe_body = safe_body.replace(html.escape(presentation_url), '<a href="' + html.escape(presentation_url, quote=True) + '">Add your presentation</a>')
+        for event in later or []:
+            link = config['site_url'] + 'agenda.html?' + urlencode(dict(present=event['id'], placeholder='1')) + '#' + urlencode(dict(token=invite['token']))
+            safe_body = safe_body.replace(html.escape(link), '<a href="' + html.escape(link, quote=True) + '">Reserve ' + html.escape(event['name']) + '</a>')
     paragraphs = ''.join('<p style="margin:0 0 18px">' + paragraph.replace('\n', '<br>') + '</p>'
                          for paragraph in safe_body.strip().split('\n\n'))
     mail.add_alternative('<html><body><div style="font:15px/1.7 Arial,sans-serif;max-width:600px;color:#152d35">'
                          + paragraphs + '</div></body></html>', subtype='html')
     if kind == 'confirm':
-        mail.add_attachment(calendar_bytes(state['final_event']), maintype='text', subtype='calendar', filename='d3-seminar.ics')
+        mail.add_attachment(calendar_bytes(state['final_event'], state.get('finalized_at')), maintype='text', subtype='calendar', filename='d3-seminar.ics')
     return mail
 
 
 def eligible(invite, response, kind, state=None):
-    if kind not in {'invite', 'remind', 'confirm'}:
+    if kind not in {'invite', 'remind', 'confirm', 'present'}:
         return False
     deliveries = invite.get('deliveries', {})
     state = state or {}
@@ -472,80 +518,17 @@ def eligible(invite, response, kind, state=None):
         if not state.get('final_event'):
             return False
         key = 'confirm:' + state['finalized_at']
+    elif kind == 'present':
+        if invite.get('role') != 'student':
+            return False
     else:
         if state.get('final_event'):
             return False
-        if len(answers) == len(invite['poll']['slots']):
+        if kind == 'remind' and all(answers.get(slot['id']) for slot in invite['poll']['slots']):
             return False
         if kind == 'remind' and deliveries.get('invite:' + revision, {}).get('status') != 'sent':
             return False
     return key if key not in deliveries else False
-
-
-def send(args):
-    config, local = load_config(), settings()
-    invitations = load_invitations(config)
-    recipients = [invite for invite in invitations if args.all or invite['email'] == email_address(args.to)]
-    if not recipients:
-        raise ValueError('No matching participant. Run prepare after editing the participant list.')
-    if config['test_mode'] and any(invite['email'] != local['test_recipient'] for invite in recipients):
-        raise ValueError('Test mode blocks delivery to anyone except the test recipient.')
-    responses = get_responses(config, invitations) if args.send or args.kind != 'invite' else {}
-    state = backend(config, 'dashboard')['state'] if responses else {}
-    queue = [(invite, eligible(invite, responses.get(invite['id']), args.kind, state)) for invite in recipients]
-    queue = [(invite, key) for invite, key in queue if key]
-    if not queue:
-        print('No eligible messages. Already sent or attempted messages are not sent again.')
-        return
-    preview_dir = event_private(config) / 'outbox'
-    preview_dir.mkdir(exist_ok=True, parents=True, mode=0o700)
-    messages = []
-    for invite, key in queue:
-        mail = message(config, local, invite, args.kind, state)
-        filename = preview_dir / f'{invite["id"]}-{args.kind}.eml'
-        filename.write_bytes(bytes(mail))
-        filename.chmod(0o600)
-        messages.append((invite, key, mail))
-        print(f'{"Send" if args.send else "Preview"}: {args.kind} → {invite["email"]}')
-    if not args.send:
-        print(f'Email previews saved in {preview_dir.relative_to(ROOT)}/. Nothing sent. Add --send to deliver.')
-        return
-    if not local['smtp_username']:
-        raise ValueError('Set your JMU account username with configure --smtp-user first.')
-    password = os.environ.get('D3_SMTP_PASSWORD') or getpass.getpass('JMU password (not stored): ')
-    if not password:
-        raise ValueError('A password is required to send.')
-    with smtplib.SMTP_SSL(local['smtp_host'], local['smtp_port'], context=ssl.create_default_context(), timeout=30) as smtp:
-        smtp.login(local['smtp_username'], password)
-        for invite, key, mail in messages:
-            # Recheck after the password prompt in case someone responded meanwhile.
-            current = get_responses(config, invitations)
-            latest = backend(config, 'dashboard')['state']
-            if eligible(invite, current.get(invite['id']), args.kind, latest) != key:
-                print(f'Skipped changed response: {invite["email"]}')
-                continue
-            # Persist before SMTP to prevent automatic duplicates after a crash or ambiguous timeout.
-            invite['deliveries'][key] = dict(status='attempted', at=now(), message_id=mail['Message-ID'])
-            save_private(event_private(config) / 'invitations.json', invitations)
-            smtp.send_message(mail, from_addr=local['sender_email'], to_addrs=[invite['email']])
-            invite['deliveries'][key]['status'] = 'sent'
-            save_private(event_private(config) / 'invitations.json', invitations)
-            print(f'Accepted by the university mail server: {invite["email"]}')
-
-
-def smtp_check(args):
-    local = settings()
-    with smtplib.SMTP_SSL(local['smtp_host'], local['smtp_port'], context=ssl.create_default_context(), timeout=20) as smtp:
-        code, _ = smtp.ehlo()
-        if code != 250:
-            raise ValueError('The SMTP server did not accept EHLO.')
-        print('JMU SMTP connection and TLS certificate verified. No login attempted and no email sent.')
-        print('Authentication methods:', smtp.esmtp_features.get('auth', 'not advertised'))
-
-
-def test_mail(args):
-    address = settings()['test_recipient']
-    send(argparse.Namespace(kind=args.kind, to=address, all=False, send=True))
 
 
 def main():
@@ -568,20 +551,10 @@ def main():
     prepare_cmd.set_defaults(run=prepare)
     commands.add_parser('sync', help='Register invitation hashes with the local SQLite backend').set_defaults(run=synchronize)
     commands.add_parser('status', help='Fetch current participant responses').set_defaults(run=status)
-    commands.add_parser('admin', help='Open the private organizer dashboard').set_defaults(run=open_page)
-    commands.add_parser('open-test', help='Open your personal test invitation').set_defaults(run=open_page)
-    commands.add_parser('home', help='Open your personal programme homepage').set_defaults(run=open_page)
-    commands.add_parser('smtp-check', help='Test SMTP connectivity without sending').set_defaults(run=smtp_check)
-    tester = commands.add_parser('test-mail', help='Send one test message to your configured test address')
-    tester.add_argument('kind', choices=['invite', 'remind', 'confirm'], nargs='?', default='invite')
-    tester.set_defaults(run=test_mail)
-    sender = commands.add_parser('send', help='Preview or send one invitation, reminder, or confirmation per person')
-    sender.add_argument('kind', choices=['invite', 'remind', 'confirm'])
-    target = sender.add_mutually_exclusive_group(required=True)
-    target.add_argument('--to')
-    target.add_argument('--all', action='store_true')
-    sender.add_argument('--send', action='store_true', help='Actually deliver; default is preview only')
-    sender.set_defaults(run=send)
+    for command, help_text in [('admin', 'Open the private organizer dashboard'), ('open-test', 'Open your personal test invitation'), ('home', 'Open your personal programme homepage')]:
+        page = commands.add_parser(command, help=help_text)
+        page.add_argument('--print-url', action='store_true', help='Print the private link instead of opening a browser')
+        page.set_defaults(run=open_page)
     args = parser.parse_args()
     PRIVATE.mkdir(exist_ok=True, mode=0o700)
     with (PRIVATE / 'command.lock').open('w') as lock:
@@ -599,7 +572,7 @@ def main():
             else:
                 EVENT_ID = args.event
                 args.run(args)
-        except (ValueError, OSError, smtplib.SMTPException, KeyError) as error:
+        except (ValueError, OSError, KeyError) as error:
             parser.exit(1, f'Error: {error}\n')
 
 

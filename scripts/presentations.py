@@ -18,6 +18,7 @@ def own(connection, participant_id):
         return {}
     result = json.loads(row[0])
     result.setdefault('visibility', 'internal')
+    result.setdefault('status', 'talk')
     result.setdefault('presentation_minutes', None)
     result.setdefault('questions_minutes', None)
     result['files'] = {kind:dict(id=key, name=name, mime=mime, size=size) for key, kind, name, mime, size in connection.execute(
@@ -35,7 +36,7 @@ def listing(store, connection, viewer_id=None):
         if talk and (viewer_id is not None or talk['visibility'] == 'public'):
             row = dict(name=person['name'])
             if viewer_id is not None:
-                row.update({key:talk[key] for key in ('title', 'abstract', 'visibility', 'presentation_minutes', 'questions_minutes', 'explainer_url', 'slides_url', 'files')})
+                row.update({key:talk[key] for key in ('title', 'abstract', 'visibility', 'status', 'presentation_minutes', 'questions_minutes', 'explainer_url', 'slides_url', 'files')})
                 row['mine'] = person['id'] == viewer_id
             result.append(row)
     return result
@@ -74,6 +75,12 @@ def save(store, token, proposal, version='', remove=False):
         if visibility not in ('internal', 'public'):
             raise ValueError('Choose Internal or Public for your talk.')
         data['visibility'] = visibility
+        status = proposal.get('status', current.get('status', 'talk'))
+        if status not in {'talk', 'placeholder'}:
+            raise ValueError('Choose a talk or a provisional placeholder.')
+        if status == 'placeholder' and visibility != 'internal':
+            raise ValueError('Keep provisional placeholders internal until the topic is ready to share.')
+        data['status'] = status
         for key, minimum, label in [('presentation_minutes', 1, 'Presentation'), ('questions_minutes', 0, 'Questions')]:
             value = proposal.get(key, current.get(key))
             if value is not None and (type(value) is not int or not minimum <= value <= 480):

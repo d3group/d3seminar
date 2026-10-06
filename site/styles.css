@@ -370,7 +370,7 @@ textarea { display: block; width: 100%; min-height: 90px; resize: vertical; bord
 .admin-editor, .mail-controls { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
 .admin-editor > summary { cursor: pointer; font-weight: 600; font-size: 16px; margin-bottom: 16px; }
 .admin-editor label, #mail-send-form > label { display: block; font-size: 13px; margin-bottom: 6px; }
-.admin-editor input:not([type="checkbox"]), #smtp-password, #mail-kind { display: block; max-width: 100%; min-width: 0; padding: 9px 10px; color: var(--ink); background: white; border: 1px solid #b9c8d4; border-radius: 3px; font: inherit; font-size: 13px; margin-bottom: 16px; }
+.admin-editor input:not([type="checkbox"]), #mail-kind { display: block; max-width: 100%; min-width: 0; padding: 9px 10px; color: var(--ink); background: white; border: 1px solid #b9c8d4; border-radius: 3px; font: inherit; font-size: 13px; margin-bottom: 16px; }
 .programme-form input { width: 100%; }
 .programme-form { max-width: 620px; }
 .schedule-option { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; margin-top: 12px; }

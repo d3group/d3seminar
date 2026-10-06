@@ -1,3 +1,4 @@
+import {apiFetch, loadConfig, apiUrl} from './api.js';
 import {selectEvent, slotLabel, eventHref, preserveInvitationLinks, loadProgramme, renderProgramme, renderPresentationNudge, agendaSchedule, nextSeminar, eventDisclosure} from './shared.js';
 
 const $ = id => document.getElementById(id);
@@ -36,7 +37,7 @@ function setStatus(message, kind = '') {
 
 function showSaved(entry, removed) {
   const talk = entry.invitation.presentation;
-  const heading = removed ? 'Proposal withdrawn.' : 'Your talk is saved.';
+  const heading = removed ? 'Proposal withdrawn.' : talk.status === 'placeholder' ? 'Your placeholder is saved.' : 'Your talk is saved.';
   setStatus(heading, 'success');
   const status = $('presentation-status');
   status.replaceChildren(element('h3', heading), element('p', removed ? entry.event.name : `“${talk.title}” · ${entry.event.name}`));
@@ -63,7 +64,7 @@ function materialsCell(event, talk, kind) {
   const file = talk.files?.[kind];
   if (file) {
     const form = element('form', '', 'material-download');
-    form.action = '/api/material'; form.method = 'post'; form.target = '_blank'; form.rel = 'noopener';
+    form.action = apiUrl('material'); form.method = 'post'; form.target = '_blank'; form.rel = 'noopener';
     for (const [name, value] of Object.entries({...(token ? {token} : {}), event_id:event.id, file_id:file.id})) {
       const input = document.createElement('input'); input.type = 'hidden'; input.name = name; input.value = value; form.append(input);
     }
@@ -127,6 +128,7 @@ function talkTable(event, talks, finalEvent) {
     const name = element('th', talk.name); name.scope = 'row'; name.dataset.label = 'Presenter';
     const details = element('td', '', 'talk-description'); details.dataset.label = 'Talk & abstract';
     details.append(element('strong', talk.title));
+    if (talk.status === 'placeholder') details.append(element('span', 'Provisional title', 'talk-visibility'));
     if (talk.presentation_minutes != null || talk.questions_minutes != null) details.append(durationBar(talk));
     details.append(element('span', talk.visibility === 'public' ? 'Public' : 'Internal', 'talk-visibility'));
     if (talk.abstract) {
@@ -148,8 +150,8 @@ function presenterList(talks) {
   return section;
 }
 
-function renderEvent(event, invitation, error, publicTalks = [], open = false) {
-  const finalEvent = invitation?.state.final_event;
+function renderEvent(event, invitation, error, publicTalks = [], open = false, publicFinal = null) {
+  const finalEvent = invitation?.state.final_event || publicFinal;
   const row = element('article', '', 'agenda-event'); row.dataset.event = event.id;
   const heading = element('div', '', 'agenda-event-heading');
   const title = element('h2', event.name); title.id = 'agenda-' + event.id; title.tabIndex = -1;
@@ -172,7 +174,7 @@ function renderEvent(event, invitation, error, publicTalks = [], open = false) {
   const content = element('div', '', 'event-content'); content.append(header);
   const details = element('section', '', 'agenda-details');
   if (error) details.append(element('p', 'This agenda could not be loaded.', 'agenda-empty'));
-  else if (finalEvent) renderProgramme(details, invitation.state.programme, 'h3');
+  else if (finalEvent && invitation) renderProgramme(details, invitation.state.programme, 'h3');
   if (details.childElementCount) content.append(details);
   const talks = invitation?.presentations || publicTalks;
   if (!error) content.append(invitation ? talkTable(event, talks, finalEvent)
@@ -184,11 +186,11 @@ function renderEvent(event, invitation, error, publicTalks = [], open = false) {
 
 function renderAgendas() {
   $('agenda-list').replaceChildren();
-  const programme = entries.map(entry => ({...entry, event:{...selectEvent(config, entry.event.id), ...entry.invitation?.poll}}));
+  const programme = entries.map(entry => ({...entry, event:{...selectEvent(config, entry.event.id), ...entry.event, ...entry.invitation?.poll}}));
   const next = nextSeminar(programme);
   programme.forEach(entry => {
     const open = expandedEvents.get(entry.event.id) ?? (entry === next || entry.event.id === requestedEvent);
-    const row = renderEvent(entry.event, entry.invitation, entry.error, entry.presentations, open);
+    const row = renderEvent(entry.event, entry.invitation, entry.error, entry.presentations, open, entry.final_event);
     if (entry === next) row.prepend(element('p', 'Up next!', 'next-seminar-note'));
   });
   renderPresentationNudge($('presentation-nudge'), entries, token);
@@ -200,6 +202,14 @@ function selectedEntry() { return entries.find(entry => entry.event.id === $('pr
 function visibility() { return document.querySelector('input[name="visibility"]:checked').value; }
 
 function updateVisibilityNote() {
+  const provisional = $('talk-placeholder').checked;
+  const publicChoice = document.querySelector('input[name="visibility"][value="public"]');
+  publicChoice.disabled = provisional;
+  if (provisional) document.querySelector('input[name="visibility"][value="internal"]').checked = true;
+  if (provisional) {
+    $('visibility-note').textContent = 'Provisional topics stay within the group. Update your title and uncheck the provisional option when your talk is ready.';
+    return;
+  }
   $('visibility-note').textContent = visibility() === 'public'
     ? 'Only your name will appear publicly. Your title, abstract and materials stay within the group. Choose Public only for mature topics nearing publication.'
     : 'Only invited participants can see your talk and materials.';
@@ -216,13 +226,13 @@ function currentFiles() {
 
 function rememberDraft() {
   if (!editingId) return;
-  const draft = {title:$('talk-title').value, abstract:$('talk-abstract').value, visibility:visibility(), ...readTiming(),
+  const draft = {title:$('talk-title').value, abstract:$('talk-abstract').value, status:$('talk-placeholder').checked ? 'placeholder' : 'talk', visibility:visibility(), ...readTiming(),
     explainer_url:$('explainer-url').value, slides_url:$('slides-url').value,
     uploads:Object.fromEntries(['explainer', 'slides'].map(kind => [kind, [...$(kind + '-file').files]]))};
   const saved = entries.find(entry => entry.event.id === editingId).invitation.presentation || {};
   const changed = ['title', 'abstract', 'explainer_url', 'slides_url'].some(key => draft[key] !== (saved[key] || ''));
   const timingChanged = ['presentation_minutes', 'questions_minutes'].some(key => draft[key] !== (saved[key] ?? null));
-  if (changed || timingChanged || draft.visibility !== (saved.visibility || 'internal') || Object.values(draft.uploads).some(files => files.length)) drafts.set(editingId, draft);
+  if (changed || timingChanged || draft.status !== (saved.status || 'talk') || draft.visibility !== (saved.visibility || 'internal') || Object.values(draft.uploads).some(files => files.length)) drafts.set(editingId, draft);
   else drafts.delete(editingId);
 }
 
@@ -231,6 +241,7 @@ function loadEditor() {
   const draft = drafts.get(editingId);
   const talk = draft || selectedEntry().invitation.presentation || {};
   $('talk-title').value = talk.title || ''; $('talk-abstract').value = talk.abstract || '';
+  $('talk-placeholder').checked = talk.status === 'placeholder';
   $('presentation-minutes').value = talk.presentation_minutes ?? ''; $('questions-minutes').value = talk.questions_minutes ?? '';
   updateTimingTotal();
   document.querySelectorAll('input[name="visibility"]').forEach(input => input.checked = input.value === (talk.visibility || 'internal'));
@@ -280,7 +291,7 @@ async function result(response) {
 
 async function savePresentation(remove = false) {
   const entry = selectedEntry();
-  const proposal = {title:$('talk-title').value, abstract:$('talk-abstract').value, visibility:visibility(), ...readTiming(),
+  const proposal = {title:$('talk-title').value, abstract:$('talk-abstract').value, status:$('talk-placeholder').checked ? 'placeholder' : 'talk', visibility:visibility(), ...readTiming(),
     explainer_url:$('explainer-url').value, slides_url:$('slides-url').value};
   const files = ['explainer', 'slides'].map(kind => [kind, $(kind + '-file').files[0]]).filter(([, file]) => file);
   const status = $('presentation-status');
@@ -294,12 +305,12 @@ async function savePresentation(remove = false) {
   setStatus(remove ? 'Withdrawing…' : 'Saving your talk…');
   let saved = false;
   try {
-    const response = await fetch('/api/presentation', {method:'POST', headers:{'Content-Type':'application/json'},
+    const response = await apiFetch('presentation', {method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({token, event_id:entry.event.id, version:entry.invitation.presentation?.version || '', presentation:proposal, remove})});
     updatePresentation(entry, await result(response)); saved = true;
     if (!remove) {
       for (const [kind, file] of files) {
-        const response = await fetch('/api/presentation-upload', {method:'POST', body:file, headers:{
+        const response = await apiFetch('presentation-upload', {method:'POST', body:file, headers:{
           'X-Invitation-Token':token, 'X-Event-Id':entry.event.id, 'X-Material-Kind':kind,
           'X-File-Name':encodeURIComponent(file.name), 'X-Presentation-Version':entry.invitation.presentation.version
         }});
@@ -316,6 +327,7 @@ async function savePresentation(remove = false) {
     saving = false;
     $('presentation-form').setAttribute('aria-busy', 'false'); $('save-presentation').textContent = 'Save talk';
     document.querySelectorAll('#presentation-editor input, #presentation-editor textarea, #presentation-editor select, #presentation-editor button, [data-present]').forEach(node => node.disabled = false);
+    updateVisibilityNote();
   }
 }
 
@@ -326,10 +338,16 @@ function setupEditor() {
     const option = element('option', event.name); option.value = event.id; $('presentation-event').append(option);
   }
   const requested = new URLSearchParams(location.search).get('present');
-  if (editable.some(entry => entry.event.id === requested)) openEditor(requested);
+  if (editable.some(entry => entry.event.id === requested)) {
+    openEditor(requested);
+    if (new URLSearchParams(location.search).get('placeholder') === '1' && !selectedEntry().invitation.presentation?.title) {
+      $('talk-placeholder').checked = true; updateVisibilityNote();
+    }
+  }
   $('presentation-event').addEventListener('change', () => openEditor($('presentation-event').value));
   $('close-editor').addEventListener('click', closeEditor);
   document.querySelectorAll('input[name="visibility"]').forEach(input => input.addEventListener('change', updateVisibilityNote));
+  $('talk-placeholder').addEventListener('change', updateVisibilityNote);
   $('presentation-nudge').addEventListener('click', event => {
     const link = event.target.closest('a');
     if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -342,25 +360,20 @@ function setupEditor() {
 }
 
 async function start() {
-  const response = await fetch('config.json', {cache:'no-store'});
-  if (!response.ok) throw new Error('The agenda could not be loaded. Please try again.');
-  config = await response.json();
+  config = await loadConfig();
   document.title = 'Agenda · D3 · ' + config.semester;
   entries = config.events.map(event => ({event}));
-  const backend = config.backend_url ? new URL(config.backend_url) : null;
   if (token) {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('Your personal link is incomplete. Please open the full link from your email.');
-    if (!backend || backend.origin !== location.origin) throw new Error('Confirmed agendas are not available here yet. Please use your invitation link.');
     entries = await loadProgramme(config, token, false, true);
     if (!entries.some(entry => entry.invitation)) throw new Error('Your invitation could not be loaded. Please reopen your email link or contact Aabhash.');
   } else {
     entries = await Promise.all(config.events.map(async event => {
       try {
-        if (!backend || backend.origin !== location.origin) throw new Error('Public talks are not available here yet.');
-        const response = await fetch('/api/public-presentations', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({event_id:event.id})});
+        const response = await apiFetch('public-event', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({event_id:event.id})});
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || 'Public talks could not be loaded.');
-        return {event, presentations:data.presentations};
+        return {event:{...event, ...data.poll, slots:data.final_event ? [data.final_event] : data.poll.slots}, presentations:data.presentations, final_event:data.final_event};
       } catch (error) { return {event, error:error.message}; }
     }));
   }

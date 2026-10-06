@@ -10,6 +10,8 @@ from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
 import seminar
+import presentations
+from waitress.wasyncore import close_all
 from server import Store, create_server, receipt
 
 TOKEN = 'A' * 43
@@ -43,6 +45,14 @@ class StoreTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 self.store.respond(dict(RESPONSE, **bad))
         self.assertEqual(self.store.invitation(TOKEN)['answers'], {})
+
+    def test_https_pages_invitation_preserves_existing_answers_and_rejects_unsafe_urls(self):
+        self.store.respond(RESPONSE)
+        self.store.sync([dict(INVITE, site_url='https://d3group.github.io/d3seminar/')])
+        self.assertEqual(self.store.invitation(TOKEN)['answers'], {SLOT:'available'})
+        for url in ('http://outside.example/', 'https://user:password@example.com/', 'https://example.com/#token=x', 'https://example.com/?next=x', 'https://example.com/no-slash', 'javascript:alert(1)'):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                self.store.sync([dict(INVITE, site_url=url)])
 
     def test_calendar_edits_merge_choices_without_overwriting_other_answers_or_notes(self):
         other = POLL['slots'][1]['id']
@@ -88,6 +98,40 @@ class StoreTests(unittest.TestCase):
         self.assertNotIn('email', response)
         self.assertNotIn('token_hash', response)
         self.assertNotIn('participants', response)
+
+    def test_public_event_shares_totals_and_public_names_only(self):
+        poll = dict(POLL, required_participants=3)
+        first = dict(INVITE, role='student', poll=poll, revision=seminar.event_revision(poll))
+        second = dict(first, id='b'*24, name='Bea', email='bea@example.com', token_hash=seminar.digest('B'*43))
+        self.store.sync([first, second])
+        self.store.respond(dict(RESPONSE, revision=first['revision'], comment='Private note'))
+        self.store.respond(dict(RESPONSE, token='B'*43, revision=first['revision'], **{'answer:' + SLOT:'unavailable'}))
+        talk = dict(title='Private title', abstract='Private abstract', explainer_url='https://example.org/private', slides_url='')
+        presentations.save(self.store, TOKEN, dict(talk, visibility='public'))
+        presentations.save(self.store, 'B'*43, dict(talk, visibility='internal'))
+        public = self.store.public_event(POLL)
+        self.assertEqual(set(public), {'poll', 'final_event', 'totals', 'presentations'})
+        self.assertEqual(public['totals'][SLOT], dict(available=1, unavailable=1, unknown=1))
+        self.assertEqual(public['totals'][poll['slots'][1]['id']], dict(available=0, unavailable=0, unknown=3))
+        self.assertEqual(public['presentations'], [dict(name='Ada')])
+        self.assertIsNone(public['final_event'])
+        for private in ('Bea', 'email', 'token_hash', 'Private', 'example.org', 'participant_id', 'updated_at', 'revision'):
+            self.assertNotIn(private, json.dumps(public))
+        self.store.sync([first])
+        public = self.store.public_event(POLL)
+        self.assertEqual(public['totals'][SLOT], dict(available=1, unavailable=0, unknown=2))
+        with self.store.connect() as connection:
+            self.store.write_state(connection, dict(final_event=dict(seminar.event_data(poll, poll['slots'][0]), programme=talk), programme=talk))
+        public = self.store.public_event(POLL)
+        self.assertEqual(public['final_event'], {key:seminar.event_data(poll, poll['slots'][0])[key] for key in ('slot_id', 'start', 'end')})
+        self.assertNotIn('Private', json.dumps(public))
+
+    def test_public_event_before_invitations_has_empty_totals(self):
+        store = Store(Path(self.temp.name) / 'empty.sqlite3')
+        public = store.public_event(POLL)
+        self.assertEqual(public['poll'], POLL)
+        self.assertEqual(public['totals'][SLOT], dict(available=0, unavailable=0, unknown=POLL['required_participants']))
+        self.assertEqual(public['presentations'], [])
 
     def test_calendar_votes_require_active_invitation_and_exclude_private_fields(self):
         other = dict(INVITE, id='b'*24, name='Bea', email='bea@example.com', token_hash=seminar.digest('B'*43))
@@ -275,15 +319,15 @@ class HTTPTests(unittest.TestCase):
         cls.store.sync([INVITE])
         config = json.loads((Path(__file__).parent / 'fixtures/programme.json').read_text())
         cls.server = create_server(0, store=cls.store, config=config, admin_secret='secret' * 8)
-        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread = threading.Thread(target=cls.server.run, daemon=True)
         cls.thread.start()
-        cls.port = cls.server.server_address[1]
+        cls.port = cls.server.effective_port
 
     @classmethod
     def tearDownClass(cls):
-        cls.server.shutdown()
-        cls.server.server_close()
-        cls.thread.join()
+        cls.server.task_dispatcher.shutdown()
+        cls.server.trigger.pull_trigger(lambda: close_all(cls.server._map))
+        cls.thread.join(timeout=3)
         cls.temp.cleanup()
 
     def request(self, method, path, body=None, headers=None):
@@ -295,7 +339,7 @@ class HTTPTests(unittest.TestCase):
         return result
 
     def test_event_api_keeps_answers_finalization_and_calendar_separate(self):
-        config = seminar.event_config(self.server.config, 'seminar-2')
+        config = seminar.event_config(self.server.d3_app.config, 'seminar-2')
         poll = seminar.poll_data(config)
         revision = seminar.event_revision(poll)
         invite = dict(INVITE, name='Seminar Two Participant', poll=poll, revision=revision, event_id='seminar-2')
@@ -338,6 +382,20 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.request('GET', '/agenda.html')[0], 200)
         self.assertEqual(self.request('GET', '/agenda.js')[0], 200)
 
+    def test_proxy_accepts_only_configured_frontend_and_local_cli(self):
+        headers = {'Host':'localhost:8080', 'Origin':'http://localhost:8080'}
+        self.assertEqual(self.request('GET', '/health', headers=headers)[0], 403)
+        original = self.server.d3_app.public_url
+        self.server.d3_app.public_url = 'http://localhost:8080/'
+        try:
+            self.assertEqual(self.request('GET', '/health', headers=headers)[0], 200)
+            self.assertEqual(self.request('GET', '/health')[0], 200)
+            self.assertEqual(self.request('GET', '/health', headers={'Host':'127.0.0.1:8080', 'Origin':'http://127.0.0.1:8080'})[0], 200)
+            for override in [{'Host':'evil.example'}, {'Origin':'https://evil.example'}, {'Origin':'http://localhost:8081'}]:
+                self.assertEqual(self.request('GET', '/health', headers={**headers, **override})[0], 403)
+        finally:
+            self.server.d3_app.public_url = original
+
     def test_admin_requires_secret_and_cross_site_requests_are_blocked(self):
         status, body = self.request('POST', '/api/admin', json.dumps(dict(action='responses', secret='wrong')), {'Content-Type':'application/json'})
         self.assertEqual(status, 403)
@@ -345,7 +403,32 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/respond', urlencode(RESPONSE), {'Content-Type':'application/x-www-form-urlencoded', 'Origin':'https://evil.example'})[0], 403)
         self.assertEqual(self.request('GET', '/', headers={'Host':'evil.example'})[0], 403)
 
-    def test_calendar_votes_are_not_public_or_accessible_to_uninvited_people(self):
+    def test_pages_cors_preflight_and_public_reads_keep_writes_authenticated(self):
+        origin = 'https://d3group.github.io'
+        original = self.server.d3_app.config['site_url']
+        self.server.d3_app.config['site_url'] = origin + '/d3seminar/'
+        try:
+            headers = {'Origin':origin, 'Access-Control-Request-Method':'POST',
+                       'Access-Control-Request-Headers':'Content-Type, X-Invitation-Token, X-Event-Id, X-Material-Kind, X-File-Name, X-Presentation-Version'}
+            connection = http.client.HTTPConnection('127.0.0.1', self.port)
+            connection.request('OPTIONS', '/api/presentation-upload', headers=headers)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 204)
+            self.assertEqual(response.getheader('Access-Control-Allow-Origin'), origin)
+            self.assertIn('Origin', response.getheader('Vary'))
+            self.assertIsNone(response.getheader('Access-Control-Allow-Credentials'))
+            response.read(); connection.close()
+            for blocked in ('https://evil.example', 'https://d3group.github.io.evil.example', 'null'):
+                self.assertEqual(self.request('OPTIONS', '/api/respond', headers={**headers, 'Origin':blocked})[0], 403)
+            self.assertEqual(self.request('OPTIONS', '/api/respond', headers={**headers, 'Access-Control-Request-Method':'DELETE'})[0], 403)
+            self.assertEqual(self.request('OPTIONS', '/api/respond', headers={**headers, 'Access-Control-Request-Headers':'X-Unknown'})[0], 403)
+            self.assertEqual(self.request('POST', '/api/public-event', '{}', {'Origin':origin, 'Content-Type':'application/json'})[0], 200)
+            self.assertEqual(self.request('POST', '/api/respond', 'answer:'+SLOT+'=available', {'Origin':origin, 'Content-Type':'application/x-www-form-urlencoded'})[0], 400)
+            self.assertEqual(self.request('POST', '/api/admin', '{"action":"responses"}', {'Origin':origin, 'Content-Type':'application/json'})[0], 403)
+        finally:
+            self.server.d3_app.config['site_url'] = original
+
+    def test_individual_calendar_votes_require_an_invitation(self):
         headers = {'Content-Type':'application/json'}
         for request in (dict(include_votes=True), dict(token='X'*43, include_votes=True),
                         dict(token=TOKEN, event_id='seminar-3', include_votes=True)):
@@ -354,6 +437,30 @@ class HTTPTests(unittest.TestCase):
             self.assertNotIn('participants', body)
             self.assertNotIn('Ada', body)
         self.assertEqual(self.request('GET', '/api/invitation?include_votes=true')[0], 404)
+
+    def test_public_event_never_grants_write_access_or_individual_responses(self):
+        headers = {'Content-Type':'application/json'}
+        with self.store.connect() as connection:
+            before = list(connection.iterdump())
+        for token in (None, 'X'*43, TOKEN):
+            status, body = self.request('POST', '/api/public-event', json.dumps(dict(token=token, include_votes=True, include_presentations=True, action='finalize')), headers)
+            self.assertEqual(status, 200)
+            public = json.loads(body)
+            self.assertEqual(set(public), {'ok', 'poll', 'final_event', 'totals', 'presentations'})
+            self.assertNotIn('Ada', body)
+            self.assertEqual(set(public['totals'][SLOT]), {'available', 'unavailable', 'unknown'})
+        for token in ('', 'X'*43):
+            status, _ = self.request('POST', '/api/respond', urlencode(dict(RESPONSE, token=token)), {'Content-Type':'application/x-www-form-urlencoded'})
+            self.assertEqual(status, 400)
+            for remove in (False, True):
+                status, _ = self.request('POST', '/api/presentation', json.dumps(dict(token=token, remove=remove, presentation=dict(title='Unauthorized'))), headers)
+                self.assertEqual(status, 400)
+            status, _ = self.request('POST', '/api/presentation-upload', b'%PDF-1.4', {'X-Event-Id':'seminar-1', 'X-Invitation-Token':token, 'X-Material-Kind':'slides', 'X-File-Name':'talk.pdf'})
+            self.assertEqual(status, 400)
+            status, _ = self.request('POST', '/api/admin', json.dumps(dict(action='finalize', slot_id=SLOT, secret=token)), headers)
+            self.assertEqual(status, 403)
+        with self.store.connect() as connection:
+            self.assertEqual(list(connection.iterdump()), before)
 
     def test_real_form_post_writes_sqlite_before_success_receipt(self):
         status, body = self.request('POST', '/api/respond', urlencode(RESPONSE), {'Content-Type':'application/x-www-form-urlencoded'})

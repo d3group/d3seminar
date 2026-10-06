@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="referrer" content="same-origin"><meta name="theme-color" content="#ffffff">
+  <meta name="referrer" content="strict-origin-when-cross-origin"><meta name="theme-color" content="#ffffff">
   <meta name="description" content="Topics, presenters and meeting plans for the D3 seminars and onsite meeting.">
   <title>Agenda · D3 · WS 26/27</title>
   <link rel="stylesheet" href="styles.css"><script type="module" src="agenda.js"></script>
@@ -29,12 +29,13 @@
         <h2 id="editor-title" tabindex="-1">Add your talk</h2>
         <button id="close-editor" class="text-button" type="button">Back to agenda</button>
       </div>
-      <p class="presentation-help">Start with a title. You can add the abstract and materials later.</p>
+      <p class="presentation-help">Start with a title. Work in progress is welcome. If you are planning a later contribution, choose that seminar and save a provisional title. The abstract and materials can follow.</p>
       <form id="presentation-form">
         <label for="presentation-event">Event</label>
         <select id="presentation-event" name="event_id"></select>
         <label for="talk-title">Talk title</label>
         <input id="talk-title" name="title" maxlength="200" required>
+        <label class="consent"><input id="talk-placeholder" type="checkbox"> Provisional title — details to follow</label>
         <label for="talk-abstract">Abstract <span class="field-hint">(optional for now)</span></label>
         <textarea id="talk-abstract" name="abstract" maxlength="5000" rows="4"></textarea>
         <fieldset class="presentation-timing" aria-describedby="talk-duration-total">

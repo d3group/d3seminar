@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="referrer" content="same-origin"><meta name="robots" content="noindex">
+  <meta name="referrer" content="strict-origin-when-cross-origin"><meta name="robots" content="noindex">
   <title>Organizer · D3 Research Seminar</title>
   <link rel="stylesheet" href="styles.css"><script type="module" src="admin.js"></script>
 </head>
@@ -19,7 +19,7 @@
       <div class="dashboard-summary"><div><h2 id="response-count"></h2><p id="roster-count"></p><p id="admin-deadline"></p></div><button class="secondary refresh" id="refresh">Refresh responses</button></div>
       <p class="notice" id="outcome"></p>
       <h2>Candidate times</h2><p class="admin-help" id="admin-timezone"></p>
-      <p class="admin-help">A time can be finalized only when every required attendee has marked it Available. Finalizing closes the poll. You can then send the confirmation emails below.</p>
+      <p class="admin-help">A time can be finalized only when every required attendee has marked it Available. Finalizing closes the poll. You can then send confirmations from the local email service.</p>
       <div class="table-scroll"><table><caption class="sr-only">Availability counts for each candidate time</caption><thead><tr><th scope="col">Option</th><th scope="col">Available</th><th scope="col">Unavailable</th><th scope="col">Awaiting reply</th><th scope="col">Next step</th></tr></thead><tbody id="slot-rows"></tbody></table></div>
       <details class="admin-editor" id="schedule-editor">
         <summary>Edit candidate dates and deadline</summary>
@@ -48,28 +48,24 @@
       </details>
       <h2 class="section-title">Participants</h2><p class="admin-help">Names, roles and availability are shared with invited participants. Emails and notes are only visible to organizers. Awaiting reply means unanswered, including any people still missing from the required roster.</p>
       <div class="table-scroll"><table><caption class="sr-only">Private participant responses</caption><thead id="people-head"></thead><tbody id="people-rows"></tbody></table></div>
-      <section class="mail-controls"><h2>Send from your university account</h2>
-        <p class="admin-help">Review each recipient and their personalised message before sending. Reminders go only to invited people with unfinished answers. Previously sent or attempted messages are skipped.</p>
+      <section class="mail-controls"><h2>Email previews</h2>
+        <p class="admin-help">Preview emails for the next seminar. Sending runs locally on your computer, where you enter your university password.</p>
         <form id="mail-preview-form" class="save-actions">
           <label for="mail-kind">Email type</label>
-          <select id="mail-kind"><option value="invite">Invitations</option><option value="remind">Reminders for unfinished replies</option><option value="confirm">Final confirmations and calendar</option></select>
+          <select id="mail-kind"><option value="invite">1 · Confirm next seminar timings</option><option value="remind">2 · Remind unfinished respondents</option><option value="present">3 · Student presentation nudge</option><option value="confirm">Final confirmations and calendar</option></select>
           <button class="secondary" type="submit">Preview recipients and emails</button>
         </form>
         <p id="mail-notice" class="notice" role="status" hidden></p>
         <section id="mail-review" class="admin-review" aria-label="Email previews" hidden>
           <p id="mail-count"></p><div id="mail-messages"></div>
-          <form id="mail-send-form" hidden>
-            <label class="consent"><input type="checkbox" id="mail-consent" required> I have reviewed these recipients and messages.</label>
-            <label for="smtp-password">University password</label><input id="smtp-password" type="password" autocomplete="off" required>
-            <p class="admin-help">Used for this send only. The application does not store your password.</p>
-            <button class="primary" id="send-mail" type="submit">Send reviewed emails</button>
-          </form>
+
         </section>
       </section>
       <details class="mail-steps"><summary>Terminal commands</summary><p>These commands prepare email previews. Add <code>--send</code> to deliver after entering your JMU password.</p>
-        <dl><dt>Invite the group</dt><dd><code>python3 scripts/seminar.py send invite --all</code></dd>
-        <dt>Remind only people with unfinished answers</dt><dd><code>python3 scripts/seminar.py send remind --all</code></dd>
-        <dt>After finalizing, send the time and calendar file to everyone</dt><dd><code>python3 scripts/seminar.py send confirm --all</code></dd></dl>
+        <dl><dt>Invite the group</dt><dd><code>python3 scripts/mailer.py invite</code></dd>
+        <dt>Remind only people with unfinished answers</dt><dd><code>python3 scripts/mailer.py remind</code></dd>
+        <dt>Nudge students to add a talk or later placeholder</dt><dd><code>python3 scripts/mailer.py present</code></dd>
+        <dt>After finalizing, send the time and calendar file to everyone</dt><dd><code>python3 scripts/mailer.py confirm</code></dd></dl>
         <p>Repeated commands skip messages already sent or attempted. Test mode allows delivery only to your test address.</p>
       </details>
     </section>
