@@ -1,0 +1,19 @@
+name: d3seminar-mail
+
+services:
+  email:
+    image: d3seminar-email:local
+    build:
+      context: .
+      dockerfile: docker/email.Dockerfile
+    user: "${D3_UID:-10001}:${D3_GID:-10001}"
+    environment:
+      D3_MAIL_API_URL: "${D3_MAIL_API_URL:-}"
+    volumes:
+      - type: bind
+        source: "${D3_MAIL_PATH:-./.mailer}"
+        target: /mail
+        bind:
+          create_host_path: false
+    stdin_open: true
+    tty: true

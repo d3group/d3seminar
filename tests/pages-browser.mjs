@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {createInterface} from 'node:readline';
+import {readFile, mkdir} from 'node:fs/promises';
 
 const {chromium} = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const fixture = spawn('python3', ['tests/browser_fixture.py', '--pages', '--presentations'], {stdio:['ignore', 'pipe', 'inherit']});
@@ -16,6 +17,57 @@ try {
   page.setDefaultTimeout(10000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
+  const bootstrap = JSON.parse(await readFile(new URL('../site/config.json', import.meta.url), 'utf8'));
+  await mkdir(new URL('../test-results/', import.meta.url), {recursive:true});
+  for (const mode of ['pending', 'unavailable']) {
+    const preview = await browser.newPage({viewport:{width:390, height:844}});
+    preview.setDefaultTimeout(10000);
+    await preview.clock.setFixedTime(new Date('2026-10-01T12:00:00Z'));
+    preview.on('pageerror', error => errors.push(error.message));
+    const apiRequests = [];
+    preview.on('request', request => {
+      if (new URL(request.url()).pathname.startsWith('/api/')) apiRequests.push(request.url());
+    });
+    await preview.route(details.base + 'config.json', route => route.fulfill({json:{...bootstrap,
+      api_url:mode === 'pending' ? '' : details.api, backend_url:''}}));
+    await preview.route(details.api + 'config.json', route => route.fulfill({status:503, body:'Unavailable'}));
+    for (const hash of ['', '#token=' + 'T'.repeat(43)]) {
+      await preview.goto(details.base + hash);
+      await preview.locator('.event-card').nth(3).waitFor({state:'attached'});
+      assert.equal(await preview.locator('#home-notice').isVisible(), true);
+      assert.match(await preview.locator('#home-notice').textContent(), /provisional/i);
+      assert.equal(await preview.locator('#programme-progress').isVisible(), false);
+      assert.equal(await preview.locator('.event-card-bottom:visible, input:visible, textarea:visible').count(), 0);
+      assert.equal(await preview.locator('button.calendar-date:not(:disabled)').count(), 0);
+      assert.equal(await preview.locator('.date-leading, .date-confirmed').filter({has:preview.locator('.calendar-day-number')}).count(), 0);
+      for (const logo of await preview.locator('.masthead img').all()) {
+        assert.equal(await logo.evaluate(image => image.complete && image.naturalWidth > 0), true);
+      }
+      assert.equal(await preview.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await preview.screenshot({path:`test-results/pages-${mode}-mobile.png`, fullPage:true});
+      await preview.getByRole('link', {name:'View agenda for Seminar 1', exact:true}).click();
+      assert.equal(new URL(preview.url()).pathname, '/d3seminar/agenda.html');
+      await preview.locator('.agenda-event').nth(3).waitFor({state:'attached'});
+      assert.match(await preview.locator('#agenda-notice').textContent(), /provisional/i);
+      assert.equal(await preview.locator('#presentation-editor').isVisible(), false);
+      assert.equal(await preview.locator('[data-present], .public-presenters').count(), 0);
+      assert.equal(await preview.getByText('No public talks yet.', {exact:true}).count(), 0);
+      await preview.getByRole('link', {name:'About', exact:true}).click();
+      await preview.getByRole('heading', {name:'About the D3 Seminar', exact:true}).waitFor();
+      await preview.goto(details.base + 'event.html?event=seminar-2' + hash);
+      if (hash) {
+        await preview.locator('#notice').filter({hasText:'provisional'}).waitFor();
+        assert.equal(await preview.locator('#response-form').isVisible(), false);
+      } else {
+        await preview.locator('[data-event="seminar-2"] .event-disclosure[open]').waitFor();
+      }
+    }
+    await preview.goto(details.admin);
+    await preview.locator('#admin-notice').filter({hasText:'provisional'}).waitFor();
+    assert.equal(await preview.locator('#dashboard').isVisible(), false);
+    assert.deepEqual(apiRequests, []);
+    await preview.close();
+  }
   await page.goto(details.home);
   await page.getByText('Hello Browser Test.', {exact:false}).waitFor();
   assert.doesNotMatch(await page.title(), /STALE STATIC COPY/);
@@ -69,7 +121,7 @@ try {
   await page.getByRole('button', {name:'Refresh responses', exact:true}).waitFor();
   await page.locator('#admin-notice').filter({hasText:'Showing saved responses'}).waitFor();
   assert.deepEqual(errors, []);
-  console.log('Pages subpath and separate API: live config, responses, agenda, uploads, protected downloads, public privacy and admin passed.');
+  console.log('Pages subpath: static launch, API outage, mobile layout, live config, responses, agenda, uploads, protected downloads, public privacy and admin passed.');
 } finally {
   await browser?.close();
   fixture.kill('SIGINT');

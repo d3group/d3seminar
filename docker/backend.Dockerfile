@@ -11,6 +11,7 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY scripts/server.py scripts/seminar.py scripts/organizer.py scripts/presentations.py scripts/backup.py /app/scripts/
 COPY site/ /app/site/
+RUN chmod -R a+rX /app/site
 COPY docker/backend-entrypoint.sh /app/docker-entrypoint.sh
 USER seminar
 EXPOSE 8765

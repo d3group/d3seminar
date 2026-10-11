@@ -1,10 +1,11 @@
-import {apiFetch, loadConfig} from './api.js';
-import {selectEvent, slotLabel, eventHref, durationLabel, preserveInvitationLinks, answeredCount, responseComplete, eventFinished, loadProgramme, nextEvent, nextSeminar, eventDisclosure, programmeProgress, showSavedResponse, voteCounts, renderProgramme, participantRings, ringArc, calendarDay, renderPresentationNudge, onsiteDays} from './shared.js';
+import {apiFetch, loadConfig, serviceNotice} from './api.js';
+import {selectEvent, slotLabel, eventHref, durationLabel, preserveInvitationLinks, answeredCount, responseComplete, eventFinished, loadProgramme, nextEvent, nextSeminar, eventDisclosure, eventTimeline, programmeProgress, showSavedResponse, voteCounts, renderProgramme, participantRings, ringArc, calendarDay, renderPresentationNudge, onsiteDays} from './shared.js';
 const $ = id => document.getElementById(id);
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
 const requestedEvent = new URLSearchParams(location.search).get('event');
 preserveInvitationLinks(token);
 const expandedEvents = new Map();
+let timeline;
 const answerNames = {available:'Available', unavailable:'Unavailable', unknown:'Awaiting reply'};
 const roleNames = {professor:'Professor', student:'Student'};
 function element(tag, text, className) {
@@ -323,7 +324,7 @@ function renderAgendaPreview(container, event, talks = null, invited = false) {
   } else if (talks !== null) container.append(element('p', `No ${invited ? '' : 'public '}talks yet`, 'agenda-preview-empty'));
 }
 
-function card(event) {
+function card(event, invited) {
   const node = document.createElement('article'); node.className = 'event-card';
   node.dataset.event = event.id;
   const title = element('h3', event.name);
@@ -341,9 +342,9 @@ function card(event) {
   programme.setAttribute('aria-label', event.name + ' programme');
   const agenda = element('section', '', 'agenda-preview');
   agenda.setAttribute('aria-label', event.name + ' agenda preview');
-  renderAgendaPreview(agenda, event, null, Boolean(token));
+  renderAgendaPreview(agenda, event, null, invited);
   const bottom = element('div', '', 'event-card-bottom');
-  bottom.hidden = !token;
+  bottom.hidden = !invited;
   const status = element('span', '', 'event-status');
   status.hidden = true;
   const link = element('a', token ? 'Share availability' : 'View event', 'event-link');
@@ -361,12 +362,10 @@ function markNextSeminar(cards, programme = cards) {
   for (const entry of cards) {
     entry.node.querySelector('.next-seminar-note')?.remove();
     if (entry.event.id === next?.event.id) entry.node.prepend(element('p', 'Up next!', 'next-seminar-note'));
-    entry.disclosure.open = expandedEvents.get(entry.event.id) ?? (entry.event.id === next?.event.id || entry.event.id === requestedEvent);
+    entry.disclosure.open = expandedEvents.get(entry.event.id) ?? (entry === cards[0] || entry.event.id === requestedEvent);
   }
-  const featured = cards.find(entry => entry.event.id === next?.event.id) || cards[0];
-  const later = element('div', '', 'event-later-list');
-  later.append(...cards.filter(entry => entry !== featured).map(entry => entry.node));
-  $('event-grid').replaceChildren(featured.node, later);
+  if (timeline) timeline.refresh();
+  else timeline = eventTimeline($('event-grid'), cards.map(entry => entry.event), requestedEvent || cards[0].event.id);
 }
 
 function renderCard(entry, invitation, onSave, openDate = null, saved = false) {
@@ -433,11 +432,17 @@ function renderProgress(programme) {
 async function start() {
   const config = await loadConfig();
   document.title = 'D3 · ' + config.semester;
-  const cards = config.events.map(entry => ({event:selectEvent(config, entry.id), ...card(selectEvent(config, entry.id))}));
+  const cards = config.events.map(entry => ({event:selectEvent(config, entry.id), ...card(selectEvent(config, entry.id), config.service_status === 'ready' && Boolean(token))}));
   markNextSeminar(cards);
+  if (config.service_status !== 'ready') {
+    $('home-lead').hidden = false;
+    $('home-intro').textContent = 'Dates and programme for the next D3 seminars.';
+    $('home-notice').textContent = serviceNotice(config);
+    $('home-notice').classList.toggle('error', config.service_status === 'unavailable');
+    return;
+  }
   if (!token) {
-    $('home-intro').textContent = 'Availability totals and public presenters for the next D3 seminars.';
-    $('home-notice').textContent = 'Public view · Editing requires your personal invitation link.';
+    $('home-notice').hidden = true;
     await Promise.all(cards.map(async entry => {
       try {
         const response = await apiFetch('public-event', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({event_id:entry.event.id})});
@@ -454,6 +459,7 @@ async function start() {
     return;
   }
   $('home-intro').textContent = 'Please enter your availability for the next D3 seminars.';
+  $('home-lead').hidden = false;
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('Your personal link is incomplete. Please open the full link from your email.');
   const programme = await loadProgramme(config, token, true, true);
   markNextSeminar(cards, programme);

@@ -9,14 +9,15 @@ import seminar
 
 
 def configure(path):
-    api = seminar.validate_api_url(os.environ.get('D3_API_URL', ''))
+    address = os.environ.get('D3_API_URL', '')
+    api = seminar.validate_api_url(address) if address else ''
     site = seminar.validate_site_url(os.environ.get('D3_SITE_URL') or 'https://d3group.github.io/d3seminar/')
-    if any(urlparse(url).scheme != 'https' or urlparse(url).hostname in ('localhost', '127.0.0.1') for url in (site, api)):
+    if any(urlparse(url).scheme != 'https' or urlparse(url).hostname in ('localhost', '127.0.0.1') for url in (site, api) if url):
         raise ValueError('GitHub Pages requires public HTTPS site and API URLs.')
     config = seminar.read_json(path)
-    config.update(site_url=site, api_url=api, backend_url=api + 'api/respond')
+    config.update(site_url=site, api_url=api, backend_url=api + 'api/respond' if api else '')
     path.write_text(json.dumps(config, indent=2) + '\n')
-    print('Public site and API addresses configured for GitHub Pages.')
+    print('GitHub Pages configured with a hosted API.' if api else 'GitHub Pages configured for a read-only programme. Set D3_API_URL when the backend is ready.')
 
 
 if __name__ == '__main__':

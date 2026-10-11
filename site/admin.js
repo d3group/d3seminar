@@ -1,4 +1,4 @@
-import {apiFetch, loadConfig} from './api.js';
+import {apiFetch, loadConfig, serviceNotice} from './api.js';
 import {slotLabel, dailyHoursLabel} from './shared.js';
 const $ = id => document.getElementById(id);
 const eventId = new URLSearchParams(location.search).get('event') || 'seminar-1';
@@ -123,7 +123,7 @@ $('schedule-form').addEventListener('submit', async event => {
     const reviewed = await api('preview_schedule', {proposal:submitted});
     if (JSON.stringify(submitted) !== JSON.stringify(proposal())) return;
     schedulePreview = {...reviewed, proposal:submitted};
-    $('schedule-effect').textContent = reviewed.resets_answers ? 'These dates will start a new round. Current answers and notes will be archived; everyone will need to reply again.' : 'Your saved answers and notes will be kept.';
+    $('schedule-effect').textContent = reviewed.resets_answers ? 'These dates will start a new round. Current answers and notes will be archived; everyone will need to reply again.' : 'Your notes and answers for dates that remain unchanged will be kept.';
     $('schedule-review-options').replaceChildren(...reviewed.options.map(option => element('li', option)));
     $('reset-consent-label').hidden = !reviewed.resets_answers; $('reset-consent').checked = false;
     $('schedule-review').hidden = false;
@@ -136,7 +136,7 @@ $('save-schedule').addEventListener('click', async () => {
   try {
     const result = await api('save_schedule', {proposal:schedulePreview.proposal, preview:schedulePreview.preview, confirm_reset:$('reset-consent').checked});
     await refresh();
-    notice(result.resets_answers ? 'New dates saved. Previous answers are archived; participants can use their existing links to reply again.' : 'Schedule saved. Existing answers are unchanged.');
+    notice(result.resets_answers ? 'New dates saved. Previous answers are archived; participants can use their existing links to reply again.' : 'Schedule saved. Answers for unchanged dates are kept.');
   } catch (error) { notice(error.message, true); }
   finally { $('save-schedule').disabled = false; }
 });
@@ -176,6 +176,7 @@ if (!secret) notice('Open this private dashboard with: python3 scripts/seminar.p
 else start().catch(error => notice(error.message, true));
 async function start() {
   const config = await loadConfig();
+  if (config.service_status !== 'ready') throw new Error(serviceNotice(config));
   const selected = config.events.find(event => event.id === eventId);
   if (!selected) throw new Error('Unknown event. Reopen the organizer dashboard.');
   $('admin-event-title').textContent = selected.name;

@@ -114,6 +114,31 @@ class OrganizerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'changed'):
             self.store.respond(dict(token=self.token, revision=before['revision']))
 
+    def test_removing_dates_preserves_remaining_answers_notes_and_personal_link(self):
+        self.answer()
+        removed, kept = self.poll['slots'][:2]
+        self.store.respond(dict(token=self.token, revision=self.invite['revision'], partial='true',
+                                **{'answer:' + kept['id']:'unavailable'}))
+        before = self.store.invitation(self.token)
+        proposal = self.schedule()
+        proposal['options'] = proposal['options'][1:]
+        preview = self.organizer.preview_schedule('seminar-1', proposal)
+        self.assertFalse(preview['resets_answers'])
+        self.organizer.save_schedule('seminar-1', proposal, preview['preview'], False)
+        current = self.store.invitation(self.token)
+        self.assertEqual(current['answers'], {kept['id']:'unavailable'})
+        self.assertEqual(current['comment'], before['comment'])
+        self.assertEqual(current['updated_at'], before['updated_at'])
+        record = seminar.read_json(self.private / 'invitations.json')[0]
+        self.assertEqual(record['token'], self.token)
+        self.assertEqual(record['revision'], current['revision'])
+        with self.store.connect() as connection:
+            history = json.loads(connection.execute('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
+        self.assertEqual(history['records'][0]['answers'], before['answers'])
+        self.assertNotIn(removed['id'], current['answers'])
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            self.store.respond(dict(token=self.token, revision=before['revision']))
+
     def test_schedule_preview_expires_after_response_and_cannot_change_finalized_time(self):
         proposal = self.schedule()
         preview = self.organizer.preview_schedule('seminar-1', proposal)

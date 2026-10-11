@@ -96,7 +96,8 @@ class Organizer:
             key = option.get('id') or 'option-' + seminar.digest(start.isoformat())[:12]
             poll['slots'].append(dict(id=key, start=start.isoformat(), end=end.isoformat()))
         seminar.validate_poll(poll)
-        resets = any(slot not in poll['slots'] for slot in dashboard['poll']['slots'])
+        old_slots = dashboard['poll']['slots']
+        resets = any(slot not in poll['slots'] for slot in old_slots) and any(slot not in old_slots for slot in poll['slots'])
         return dict(poll=poll, resets_answers=resets, preview=seminar.event_revision(dict(poll=poll, snapshot=dashboard['snapshot'])),
                     options=[seminar.when(s, zone, poll.get('daily_hours')) for s in poll['slots']])
 
@@ -138,12 +139,15 @@ class Organizer:
                     raise ValueError('Responses changed. Preview the changes again.')
                 records, state = store.records(connection), store.state(connection)
                 connection.execute('INSERT INTO history VALUES (?, ?)', (seminar.now(), json.dumps(dict(records=records, state=state))))
+                slot_ids = {slot['id'] for slot in poll['slots']}
                 for record in records:
                     if not record['active']:
                         continue
                     record.update(poll=poll, revision=revision)
                     if checked['resets_answers']:
                         record.update(answers={}, comment='', updated_at='')
+                    else:
+                        record['answers'] = {key:value for key,value in record['answers'].items() if key in slot_ids}
                     connection.execute('UPDATE invitations SET data=? WHERE id=?', (json.dumps(record), record['id']))
                 if checked['resets_answers']:
                     store.write_state(connection, {key:value for key,value in state.items() if key.startswith('programme')})

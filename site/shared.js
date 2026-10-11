@@ -30,6 +30,80 @@ export function eventDisclosure(heading, content, open, onToggle) {
   return details;
 }
 
+export function eventTimeline(container, events, initialId) {
+  const wrapper = document.createElement('section'); wrapper.className = 'event-timeline';
+  wrapper.setAttribute('aria-label', 'Event timeline'); wrapper.setAttribute('aria-roledescription', 'carousel');
+  const arrows = document.createElement('div'); arrows.className = 'timeline-arrows';
+  const arrow = (text, label, direction) => {
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = text;
+    button.setAttribute('aria-label', label); button.setAttribute('aria-controls', container.id);
+    button.addEventListener('click', () => move(index + direction * count())); arrows.append(button);
+    return button;
+  };
+  const previous = arrow('←', 'Earlier events', -1), next = arrow('→', 'Later events', 1);
+  const status = document.createElement('p'); status.className = 'sr-only'; status.setAttribute('aria-live', 'polite');
+  const stage = document.createElement('div'); stage.className = 'timeline-stage';
+  wrapper.append(status, stage);
+  container.before(wrapper); stage.append(arrows, container); container.classList.add('timeline-track');
+  container.tabIndex = 0; container.setAttribute('aria-label', 'Events, from earlier to later');
+  const mobile = matchMedia('(max-width: 680px)'), reduced = matchMedia('(prefers-reduced-motion: reduce)');
+  const count = () => mobile.matches ? 1 : 2;
+  const last = () => Math.max(0, events.length - count());
+  const step = () => container.firstElementChild.getBoundingClientRect().width + parseFloat(getComputedStyle(container).columnGap);
+  let index = Math.max(0, events.findIndex(event => event.id === initialId)), width = 0;
+  function update() {
+    index = Math.min(last(), Math.max(0, Math.round(container.scrollLeft / step())));
+    [...container.children].forEach((card, i) => { card.inert = i < index || i >= index + count(); });
+    previous.setAttribute('aria-disabled', String(index === 0)); next.setAttribute('aria-disabled', String(index === last()));
+    const text = 'Showing ' + events.slice(index, index + count()).map(event => event.name).join(' and ');
+    if (status.textContent !== text) status.textContent = text;
+    const box = container.getBoundingClientRect();
+    const heights = [...container.children].filter(card => {
+      const rect = card.getBoundingClientRect();
+      return rect.right > box.left + 8 && rect.left < box.right - 8;
+    }).map(card => card.getBoundingClientRect().height);
+    container.style.height = `${Math.ceil(Math.max(0, ...heights)) + 48}px`;
+  }
+  function move(target, behavior = 'smooth') {
+    const position = Math.max(0, Math.min(last(), target));
+    container.scrollTo({left:position * step(), behavior:reduced.matches ? 'instant' : behavior});
+    update();
+  }
+  function show(id, behavior) {
+    const target = events.findIndex(event => event.id === id);
+    if (target >= 0) move(target, behavior);
+  }
+  wrapper.addEventListener('keydown', event => {
+    if (event.target !== container && !arrows.contains(event.target)) return;
+    const target = {ArrowLeft:index - count(), ArrowRight:index + count(), Home:0, End:last()}[event.key];
+    if (target == null) return;
+    event.preventDefault(); move(target);
+  });
+  container.addEventListener('scroll', update, {passive:true});
+  container.addEventListener('focusin', event => {
+    const card = event.target.closest('[data-event]');
+    if (!card) return;
+    const target = events.findIndex(entry => entry.id === card.dataset.event);
+    if (target < index || target >= index + count()) move(target, 'instant');
+  });
+  const cardsObserver = new ResizeObserver(update);
+  const resizeObserver = new ResizeObserver(() => {
+    if (width === container.clientWidth) return;
+    width = container.clientWidth; move(index, 'instant');
+  });
+  resizeObserver.observe(container);
+  function refresh() {
+    cardsObserver.disconnect();
+    [...container.children].forEach((card, i) => {
+      card.setAttribute('aria-label', `${events[i].name}, ${i + 1} of ${events.length}`);
+      card.setAttribute('aria-roledescription', 'slide'); cardsObserver.observe(card);
+    });
+    move(index, 'instant');
+  }
+  refresh();
+  return {show, refresh};
+}
+
 export function durationLabel(event) {
   if (event.duration_days) {
     const hours = event.daily_hours;

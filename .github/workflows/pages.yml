@@ -2,13 +2,13 @@ name: Test and publish seminar site
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
-  pages: write
-  id-token: write
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   test:
@@ -18,7 +18,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
       - run: pip install -r requirements.txt
+      - run: npm ci
       - name: Check sender and response handling
         run: |
           python3 -m unittest discover -s tests -p 'test_*.py'
@@ -30,10 +35,19 @@ jobs:
           node --check site/agenda.js
           node --check site/shared.js
           node --test tests/programme.mjs
+      - name: Check Pages without a backend and with a separate API
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:pages
+          npm run test:timeline
   deploy:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -45,7 +59,7 @@ jobs:
           D3_SITE_URL: ${{ vars.D3_SITE_URL }}
         run: python3 scripts/configure_site.py
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: site
       - uses: actions/deploy-pages@v4

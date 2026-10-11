@@ -1,0 +1,13 @@
+{
+  "name": "d3seminar",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/programme.mjs",
+    "test:pages": "node tests/pages-browser.mjs",
+    "test:timeline": "node tests/timeline-browser.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.59.1"
+  }
+}

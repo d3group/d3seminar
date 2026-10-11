@@ -1,4 +1,4 @@
-import {apiFetch, loadConfig, apiUrl} from './api.js';
+import {apiFetch, loadConfig, apiUrl, serviceNotice} from './api.js';
 import {selectEvent, slotLabel, durationLabel, dailyHoursLabel, preserveInvitationLinks, eventHref, answeredCount, eventFinished, nextEvent, loadProgramme, programmeProgress, showSavedResponse, renderProgramme} from './shared.js';
 preserveInvitationLinks(new URLSearchParams(location.hash.slice(1)).get('token'));
 const $ = id => document.getElementById(id);
@@ -144,6 +144,13 @@ async function start() {
   $('event-description').textContent = 'A date will be confirmed once everyone is available.';
   $('event-position').textContent = `${config.events.findIndex(event => event.id === eventId) + 1} of ${config.events.length}`;
   $('event-id').value = eventId;
+  if (config.service_status !== 'ready') {
+    $('status-pill').textContent = 'Not open';
+    $('card-title').textContent = 'Availability';
+    $('greeting').textContent = 'Please return to your invitation later.';
+    notice(serviceNotice(config), config.service_status === 'unavailable');
+    return;
+  }
   if (config.kind === 'onsite') {
     $('poll-help').textContent = `Each option covers ${config.duration_days} consecutive dates, ${dailyHoursLabel(config.daily_hours)}. Mark Available if you can attend the whole meeting. If you can attend only part, choose Unavailable and leave a note below.`;
     $('all-available').textContent = 'All onsite options work';

@@ -1,4 +1,4 @@
-import {apiFetch, loadConfig, apiUrl} from './api.js';
+import {apiFetch, loadConfig, apiUrl, serviceNotice} from './api.js';
 import {selectEvent, slotLabel, eventHref, preserveInvitationLinks, loadProgramme, renderProgramme, renderPresentationNudge, agendaSchedule, nextSeminar, eventDisclosure} from './shared.js';
 
 const $ = id => document.getElementById(id);
@@ -173,11 +173,13 @@ function renderEvent(event, invitation, error, publicTalks = [], open = false, p
   header.append(actions);
   const content = element('div', '', 'event-content'); content.append(header);
   const details = element('section', '', 'agenda-details');
-  if (error) details.append(element('p', 'This agenda could not be loaded.', 'agenda-empty'));
+  const pending = config.service_status !== 'ready';
+  if (pending) details.append(element('p', config.service_status === 'pending' ? 'Agenda to follow.' : 'Agenda temporarily unavailable.', 'agenda-empty'));
+  else if (error) details.append(element('p', 'This agenda could not be loaded.', 'agenda-empty'));
   else if (finalEvent && invitation) renderProgramme(details, invitation.state.programme, 'h3');
   if (details.childElementCount) content.append(details);
   const talks = invitation?.presentations || publicTalks;
-  if (!error) content.append(invitation ? talkTable(event, talks, finalEvent)
+  if (!error && !pending) content.append(invitation ? talkTable(event, talks, finalEvent)
     : talks.length ? presenterList(talks) : element('p', 'No public talks yet.', 'agenda-empty'));
   row.append(eventDisclosure(heading, content, open, expanded => expandedEvents.set(event.id, expanded)));
   $('agenda-list').append(row);
@@ -189,7 +191,7 @@ function renderAgendas() {
   const programme = entries.map(entry => ({...entry, event:{...selectEvent(config, entry.event.id), ...entry.event, ...entry.invitation?.poll}}));
   const next = nextSeminar(programme);
   programme.forEach(entry => {
-    const open = expandedEvents.get(entry.event.id) ?? (entry === next || entry.event.id === requestedEvent);
+    const open = expandedEvents.get(entry.event.id) ?? (entry === programme[0] || entry.event.id === requestedEvent);
     const row = renderEvent(entry.event, entry.invitation, entry.error, entry.presentations, open, entry.final_event);
     if (entry === next) row.prepend(element('p', 'Up next!', 'next-seminar-note'));
   });
@@ -363,6 +365,12 @@ async function start() {
   config = await loadConfig();
   document.title = 'Agenda · D3 · ' + config.semester;
   entries = config.events.map(event => ({event}));
+  if (config.service_status !== 'ready') {
+    renderAgendas();
+    $('agenda-notice').textContent = serviceNotice(config);
+    $('agenda-notice').classList.toggle('error', config.service_status === 'unavailable');
+    return;
+  }
   if (token) {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('Your personal link is incomplete. Please open the full link from your email.');
     entries = await loadProgramme(config, token, false, true);
@@ -384,7 +392,10 @@ async function start() {
   $('agenda-notice').textContent = failed ? 'Some agendas could not be loaded. Please try again.' : 'Public entries show presenter names only. Talk details and materials are shared with invited participants.';
   if ($('presentation-editor').hidden) {
     const target = $('agenda-' + new URLSearchParams(location.search).get('event'));
-    if (target) { target.focus({preventScroll:true}); target.scrollIntoView({block:'start'}); }
+    if (target) {
+      target.focus({preventScroll:true});
+      target.scrollIntoView({block:'start'});
+    }
   }
 }
 
