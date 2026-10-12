@@ -72,7 +72,7 @@ class MailerTests(unittest.TestCase):
         self.assertEqual(self.preview('invite')['messages'], [])
         self.assertEqual([m['name'] for m in self.preview('remind')['messages']], ['Bea','Cora'])
         store = self.server.d3_app.store
-        with store.connect() as connection:
+        with store.session(write=True) as connection:
             store.write_state(connection, dict(final_event=dict(start='2026-10-09T14:00:00+02:00', end='2026-10-09T16:00:00+02:00')))
         self.assertEqual(self.preview('invite')['messages'], [])
         with patch.object(seminar, 'now', return_value='2026-10-10T12:00:00+00:00'):
@@ -142,12 +142,42 @@ class MailerTests(unittest.TestCase):
 
     def test_confirmation_preview_has_a_stable_calendar_timestamp(self):
         poll = self.server.d3_app.store.dashboard()['poll']
-        with self.server.d3_app.store.connect() as connection:
+        with self.server.d3_app.store.session(write=True) as connection:
             self.server.d3_app.store.write_state(connection, dict(final_event=seminar.event_data(poll, poll['slots'][0]), finalized_at='2026-10-01T12:34:56+00:00'))
         plan = self.preview('confirm')
         self.assertIn('DTSTAMP:20261001T123456Z', plan['messages'][0]['attachments'][0]['content'])
         row = plan['messages'][0]
         self.assertTrue(mailer.api(self.settings, 'claim_mail', event_id='seminar-1', kind='confirm', participant_id=row['id'], preview=row['preview'], message_id='<test@example.com>')['claimed'])
+
+    def test_both_clients_report_invalid_and_unsuccessful_api_responses(self):
+        def reply(environ, start_response):
+            start_response(status, [('Content-Type', 'application/json')])
+            return [body]
+
+        self.server.application = reply
+        with patch.object(seminar, 'PRIVATE', self.root), patch.dict(os.environ, {'D3_API_URL':self.settings['api_url']}):
+            for status, body in [('200 OK', b'[]'), ('200 OK', b'null'), ('200 OK', b'not json'),
+                                 ('503 Unavailable', b'not json'), ('403 Forbidden', b'{"ok":false,"error":"Denied"}'),
+                                 ('503 Unavailable', b'{"ok":true}')]:
+                for client in (lambda:seminar.backend({}, 'responses'), lambda:mailer.api(self.settings, 'preview_mail')):
+                    with self.subTest(status=status, body=body), self.assertRaises(ValueError):
+                        client()
+
+    def test_local_message_preserves_unicode_bodies_and_calendar_bytes(self):
+        poll = self.server.d3_app.store.dashboard()['poll']
+        with self.server.d3_app.store.session(write=True) as session:
+            self.server.d3_app.store.write_state(session, dict(final_event=seminar.event_data(poll, poll['slots'][0]), finalized_at='2026-10-01T12:34:56+00:00'))
+        plan = self.preview('confirm')
+        row = plan['messages'][0]
+        mail = mailer.message(plan, row)
+        self.assertEqual(mail['To'], row['to'])
+        self.assertEqual(str(mail['Subject']), row['subject'])
+        self.assertEqual(mail.get_body(preferencelist=('plain',)).get_content().rstrip(), row['body'].rstrip())
+        self.assertEqual(mail.get_body(preferencelist=('html',)).get_content().rstrip(), row['html'].rstrip())
+        part = next(mail.iter_attachments())
+        self.assertEqual(part.get_payload(decode=True), row['attachments'][0]['content'].encode())
+        self.assertEqual(part.get_content_type(), 'text/calendar')
+        self.assertIsNotNone(mail['Message-ID'])
 
     def test_clients_reject_redirects_without_contacting_the_destination(self):
         visited = []

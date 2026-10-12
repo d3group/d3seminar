@@ -14,11 +14,10 @@ import secrets
 import subprocess
 import sys
 from datetime import datetime, time, timedelta, timezone
-from email.message import EmailMessage
-from email.utils import formataddr, formatdate, make_msgid
 from urllib.parse import urlencode, urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zoneinfo import ZoneInfo
+
+from api_client import post_json
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE = Path(os.environ.get('D3_DATA_DIR', ROOT / '.private'))
@@ -335,10 +334,21 @@ def prepare(args):
         old = by_email.get(address)
         identity = old or shared.get(address)
         role = participant.get('role', (identity or {}).get('role', '')).strip().lower()
+        role = 'student' if role == 'phd' else role
+        if participant.get('id') or participant.get('token'):
+            supplied = {key:participant.get(key, '').strip() for key in ('id', 'token')}
+            if not re.fullmatch(r'[a-f0-9]{24}', supplied['id']) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', supplied['token']):
+                raise ValueError('Provide a valid user id and personal token together.')
+            if identity and any(identity[key] != supplied[key] for key in supplied):
+                raise ValueError('The CSV must preserve the existing personal invitation identity.')
+            identity = identity or supplied
         records.append(dict(id=identity['id'] if identity else secrets.token_hex(12), name=name, email=address, role=role,
                             token=identity['token'] if identity else secrets.token_urlsafe(32),
                             revision=revision, poll=poll,
                             deliveries=old.get('deliveries', {}) if old else {}))
+    for field in ('id', 'token'):
+        if len({record[field] for record in records}) != len(records):
+            raise ValueError('Duplicate participant ' + field + '.')
     validate_roles(records)
     if previous and previous != records:
         save_private(directory / 'history' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '-invitations.json'), previous)
@@ -354,11 +364,6 @@ def load_invitations(config):
     return records
 
 
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise ValueError('The API redirected. Set the API URL to its final HTTPS address.')
-
-
 def backend(config, action, **data):
     base = os.environ.get('D3_API_URL')
     if not base:
@@ -368,15 +373,7 @@ def backend(config, action, **data):
             raise ValueError('Set D3_API_URL explicitly for a hosted backend.')
     validate_api_url(base)
     payload = dict(action=action, event_id=config.get('event_id', 'seminar-1'), secret=settings()['admin_secret'], **data)
-    request = Request(base + 'api/admin', data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
-    with build_opener(NoRedirect).open(request, timeout=40) as response:
-        try:
-            result = json.load(response)
-        except ValueError as error:
-            raise ValueError('The backend did not return JSON. Check the local server is running.') from error
-    if not result.get('ok'):
-        raise ValueError(result.get('error', 'Backend request failed.'))
-    return result
+    return post_json(base + 'api/admin', payload)
 
 
 def synchronize(args):
@@ -431,7 +428,7 @@ def invitation_url(config, invite):
     return config['site_url'] + 'event.html?' + urlencode(dict(event=config.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(token=invite['token']))
 
 
-def message(config, local, invite, kind, state=None, later=None):
+def message_content(config, local, invite, kind, state=None, later=None):
     poll = invite['poll']
     state = state or {}
     wording = {
@@ -483,13 +480,7 @@ def message(config, local, invite, kind, state=None, later=None):
             + (presentation_note if kind == 'present' else f'Open your personal invitation:\n{invitation_url(config, invite)}\n\n')
             + 'Please keep your personal links private; anyone with them can update your responses and presentations.\n\n'
             f'Best,\n{local["sender_name"]}\n\nPlease send any comments or suggestions to {local["sender_email"]}.\n')
-    mail = EmailMessage()
-    mail['From'] = formataddr((local['sender_name'], local['sender_email']))
-    mail['To'] = invite['email']
-    mail['Subject'] = ('[TEST] ' if config['test_mode'] else '') + subject + ' | ' + series
-    mail['Date'] = formatdate(localtime=True)
-    mail['Message-ID'] = make_msgid(domain=local['sender_email'].split('@')[1])
-    mail.set_content(body)
+    subject = ('[TEST] ' if config['test_mode'] else '') + subject + ' | ' + series
     safe_body = html.escape(body).replace(html.escape(invitation_url(config, invite)),
         '<a href="' + html.escape(invitation_url(config, invite), quote=True) + '">Open your personal invitation</a>')
     if presentation_note:
@@ -499,11 +490,12 @@ def message(config, local, invite, kind, state=None, later=None):
             safe_body = safe_body.replace(html.escape(link), '<a href="' + html.escape(link, quote=True) + '">Reserve ' + html.escape(event['name']) + '</a>')
     paragraphs = ''.join('<p style="margin:0 0 18px">' + paragraph.replace('\n', '<br>') + '</p>'
                          for paragraph in safe_body.strip().split('\n\n'))
-    mail.add_alternative('<html><body><div style="font:15px/1.7 Arial,sans-serif;max-width:600px;color:#152d35">'
-                         + paragraphs + '</div></body></html>', subtype='html')
+    html_body = ('<html><body><div style="font:15px/1.7 Arial,sans-serif;max-width:600px;color:#152d35">'
+                 + paragraphs + '</div></body></html>')
+    attachments = []
     if kind == 'confirm':
-        mail.add_attachment(calendar_bytes(state['final_event'], state.get('finalized_at')), maintype='text', subtype='calendar', filename='d3-seminar.ics')
-    return mail
+        attachments.append(dict(name='d3-seminar.ics', content=calendar_bytes(state['final_event'], state.get('finalized_at')).decode()))
+    return dict(to=invite['email'], subject=subject, body=body, html=html_body, attachments=attachments)
 
 
 def eligible(invite, response, kind, state=None):

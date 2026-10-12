@@ -4,6 +4,9 @@
 !scripts/
 !scripts/*.py
 !requirements.txt
+!alembic.ini
+!migrations/
+!migrations/**
 !docker/
 !docker/**
 **/__pycache__/

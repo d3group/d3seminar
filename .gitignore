@@ -35,6 +35,8 @@ id_dsa*
 id_ecdsa*
 id_ed25519*
 participants.csv
+attendees*.csv
+users.csv
 invitations.json
 responses.json
 settings.json

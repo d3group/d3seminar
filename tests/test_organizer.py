@@ -92,8 +92,8 @@ class OrganizerTests(unittest.TestCase):
         current = self.store.invitation(self.token)
         self.assertEqual(current['answers'], {})
         self.assertTrue(current['poll']['slots'][0]['start'].endswith('+01:00'))
-        with self.store.connect() as connection:
-            history = json.loads(connection.execute('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
+        with self.store.session(write=True) as connection:
+            history = json.loads(connection.connection().exec_driver_sql('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
         self.assertEqual(history['records'][0]['comment'], 'Keep my note')
         with self.assertRaisesRegex(ValueError, 'changed'):
             self.store.respond(dict(token=self.token, revision=self.invite['revision']))
@@ -154,8 +154,8 @@ class OrganizerTests(unittest.TestCase):
         record = seminar.read_json(self.private / 'invitations.json')[0]
         self.assertEqual(record['token'], self.token)
         self.assertEqual(record['revision'], current['revision'])
-        with self.store.connect() as connection:
-            history = json.loads(connection.execute('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
+        with self.store.session(write=True) as connection:
+            history = json.loads(connection.connection().exec_driver_sql('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
         self.assertEqual(history['records'][0]['answers'], before['answers'])
         self.assertNotIn(removed['id'], current['answers'])
         with self.assertRaisesRegex(ValueError, 'changed'):

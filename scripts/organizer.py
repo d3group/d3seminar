@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import seminar
 import presentations
+from models import Invitation
 
 
 def local_datetime(value, zone):
@@ -143,13 +144,12 @@ class Organizer:
                             invite['deliveries'][kind + ':' + revision] = invite['deliveries'][old_key]
             edit = dict(event_id=event_id, revision=revision, before=dict(config=config, invitations=invitations),
                         after=dict(config=updated_config, invitations=updated_invitations))
-            with store.connect() as connection:
-                connection.execute('BEGIN IMMEDIATE')
-                dashboard = store.dashboard(connection)
+            with store.session(write=True) as session:
+                dashboard = store.dashboard(session)
                 if seminar.event_revision(dict(poll=poll, snapshot=dashboard['snapshot'])) != preview:
                     raise ValueError('Responses changed. Preview the changes again.')
-                records, state = store.records(connection), store.state(connection)
-                connection.execute('INSERT INTO history VALUES (?, ?)', (seminar.now(), json.dumps(dict(records=records, state=state))))
+                records, state = store.records(session), store.state(session)
+                store.archive(session, records, state)
                 slot_ids = {slot['id'] for slot in poll['slots']}
                 for record in records:
                     if not record['active']:
@@ -159,9 +159,9 @@ class Organizer:
                         record.update(answers={}, comment='', updated_at='')
                     else:
                         record['answers'] = {key:value for key,value in record['answers'].items() if key in slot_ids}
-                    connection.execute('UPDATE invitations SET data=? WHERE id=?', (json.dumps(record), record['id']))
+                    session.get(Invitation, record['id']).data = record
                 if checked['resets_answers']:
-                    store.write_state(connection, {key:value for key,value in state.items() if key.startswith('programme')})
+                    store.write_state(session, {key:value for key,value in state.items() if key.startswith('programme')})
                 seminar.save_private(self.journal, edit)
                 try:
                     self.write_edit(edit, 'after')
@@ -181,14 +181,13 @@ class Organizer:
             value = programme[key]
             if not isinstance(value, str) or len(value) > limit or any(ord(c) < 32 and c not in '\n\t' for c in value):
                 raise ValueError('Check the programme text and its length.')
-        with self.lock(), self.stores[event_id].connect() as connection:
-            connection.execute('BEGIN IMMEDIATE')
+        with self.lock(), self.stores[event_id].session(write=True) as session:
             store = self.stores[event_id]
-            if store.dashboard(connection)['snapshot'] != snapshot:
+            if store.dashboard(session)['snapshot'] != snapshot:
                 raise ValueError('The event changed. Refresh responses before saving its programme.')
-            state = store.state(connection)
+            state = store.state(session)
             state.update(programme={key:value.strip() for key,value in programme.items()}, programme_updated_at=seminar.now())
-            store.write_state(connection, state)
+            store.write_state(session, state)
 
     def upcoming_seminars(self):
         now = datetime.fromisoformat(seminar.now())
@@ -229,12 +228,12 @@ class Organizer:
         if kind == 'present':
             for entry in [{'id':event_id}, *later]:
                 store = self.stores[entry['id']]
-                with store.connect() as connection:
-                    for person in store.records(connection):
+                with store.session() as session:
+                    for person in store.records(session):
                         if not person['active']:
                             continue
                         registered.setdefault(person['email'], set()).add(entry['id'])
-                        if presentations.own(connection, person['id']).get('title'):
+                        if presentations.own(session, person['id']).get('title'):
                             planned.add(person['email'])
         messages = []
         for invite in invitations:
@@ -242,11 +241,8 @@ class Organizer:
             if not key or kind == 'present' and invite['email'] in planned:
                 continue
             alternatives = [e for e in later if e['id'] in registered.get(invite['email'], set())]
-            mail = seminar.message(config, local, invite, kind, dashboard['state'], alternatives)
-            row = dict(id=invite['id'], key=key, to=invite['email'], name=invite['name'], subject=str(mail['Subject']),
-                       body=mail.get_body(preferencelist=('plain',)).get_content(),
-                       html=mail.get_body(preferencelist=('html',)).get_content())
-            row['attachments'] = [dict(name=part.get_filename(), content=part.get_payload(decode=True).decode()) for part in mail.iter_attachments()]
+            row = dict(id=invite['id'], key=key, name=invite['name'],
+                       **seminar.message_content(config, local, invite, kind, dashboard['state'], alternatives))
             row['preview'] = seminar.event_revision(dict(message=row, sender=local['sender_email'], sender_name=local['sender_name']))
             messages.append(row)
         return dict(event_id=event_id, event_name=config.get('name', config['title']), kind=kind, messages=messages,

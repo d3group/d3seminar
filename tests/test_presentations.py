@@ -63,7 +63,7 @@ class PresentationTests(unittest.TestCase):
             person['revision'] = seminar.event_revision(person['poll'])
         self.store.sync(changed)
         self.assertEqual(self.store.invitation(TOKEN)['presentation'], saved)
-        with self.store.connect() as connection:
+        with self.store.session(write=True) as connection:
             self.store.write_state(connection, dict(final_event=seminar.event_data(POLL, POLL['slots'][0])))
         updated = presentations.save(self.store, TOKEN, dict(self.talk, abstract='Updated abstract.'), saved['version'])
         self.assertEqual(updated['abstract'], 'Updated abstract.')
@@ -106,16 +106,16 @@ class PresentationTests(unittest.TestCase):
         saved = presentations.save(self.store, TOKEN, self.talk)
         self.assertEqual(saved['visibility'], 'internal')
         # Existing proposals without a visibility choice remain internal.
-        with self.store.connect() as connection:
+        with self.store.session(write=True) as connection:
             legacy = {key:value for key,value in saved.items() if key not in ('files', 'visibility', 'presentation_minutes', 'questions_minutes')}
-            connection.execute('UPDATE presentations SET data=?', (json.dumps(legacy),))
+            connection.connection().exec_driver_sql('UPDATE presentations SET data=?', (json.dumps(legacy),))
         self.assertEqual(self.store.invitation(TOKEN)['presentation']['visibility'], 'internal')
         self.assertIsNone(self.store.invitation(TOKEN)['presentation']['presentation_minutes'])
         self.assertIsNone(self.store.invitation(TOKEN)['presentation']['questions_minutes'])
         uploaded = presentations.upload(self.store, TOKEN, 'slides', 'talk.pdf', b'%PDF-1.4\n', saved['version'])
         file_id = uploaded['files']['slides']['id']
         def public_talks():
-            with self.store.connect() as connection:
+            with self.store.session(write=True) as connection:
                 return presentations.listing(self.store, connection)
         self.assertEqual(public_talks(), [])
         with self.assertRaises(ValueError):

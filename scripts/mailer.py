@@ -1,34 +1,20 @@
 #!/usr/bin/env python3
 """Preview and send seminar emails locally; the university password stays on this machine."""
 
-import argparse, fcntl, getpass, json, os, smtplib, ssl
+import argparse, fcntl, getpass, os, smtplib, ssl
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
 from pathlib import Path
-from urllib.error import HTTPError
-from urllib.request import Request, build_opener
 
 import seminar
+from api_client import post_json
 
 PRIVATE = Path(os.environ.get('D3_MAIL_DIR', seminar.ROOT / '.mailer'))
 
 
 def api(settings, action, **data):
     base = seminar.validate_api_url(os.environ.get('D3_MAIL_API_URL') or settings['api_url'])
-    request = Request(base + 'api/admin', data=json.dumps(dict(action=action, secret=settings['admin_secret'], **data)).encode(),
-                      headers={'Content-Type':'application/json'})
-    try:
-        with build_opener(seminar.NoRedirect).open(request, timeout=40) as response:
-            result = json.load(response)
-    except HTTPError as error:
-        try:
-            with error:
-                result = json.load(error)
-        except ValueError:
-            raise ValueError('The backend refused this request. Check its address and connection.') from None
-    if not result.get('ok'):
-        raise ValueError(result.get('error', 'The backend request failed.'))
-    return result
+    return post_json(base + 'api/admin', dict(action=action, secret=settings['admin_secret'], **data))
 
 
 def message(plan, row):

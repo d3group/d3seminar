@@ -1,38 +1,40 @@
 import io
-import json
 from pathlib import Path
 import secrets
 from urllib.parse import urlparse
 import zipfile
 
+from sqlalchemy import delete, func, select
+
 import seminar
+from models import Invitation, Presentation, PresentationFile
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
 PRESENTER_ROLES = {'student', 'professor'}
 MATERIAL_POLICY = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
 
 
-def own(connection, participant_id):
-    row = connection.execute('SELECT data FROM presentations WHERE participant_id=?', (participant_id,)).fetchone()
-    if not row:
+def own(session, participant_id):
+    result = session.scalar(select(Presentation.data).where(Presentation.participant_id == participant_id))
+    if result is None:
         return {}
-    result = json.loads(row[0])
     result.setdefault('visibility', 'internal')
     result.setdefault('status', 'talk')
     result.setdefault('presentation_minutes', None)
     result.setdefault('questions_minutes', None)
-    result['files'] = {kind:dict(id=key, name=name, mime=mime, size=size) for key, kind, name, mime, size in connection.execute(
-        'SELECT id, kind, name, mime, length(content) FROM presentation_files WHERE participant_id=?', (participant_id,))}
+    result['files'] = {kind:dict(id=key, name=name, mime=mime, size=size) for key, kind, name, mime, size in session.execute(
+        select(PresentationFile.id, PresentationFile.kind, PresentationFile.name, PresentationFile.mime,
+               func.length(PresentationFile.content)).where(PresentationFile.participant_id == participant_id))}
     return result
 
 
-def listing(store, connection, viewer_id=None):
-    people = sorted(store.records(connection), key=lambda person: (person['name'].casefold(), person['id']))
+def listing(store, session, viewer_id=None):
+    people = sorted(store.records(session), key=lambda person: (person['name'].casefold(), person['id']))
     result = []
     for person in people:
         if not person['active'] or person.get('role') not in PRESENTER_ROLES:
             continue
-        talk = own(connection, person['id'])
+        talk = own(session, person['id'])
         if talk and (viewer_id is not None or talk['visibility'] == 'public'):
             row = dict(name=person['name'])
             if viewer_id is not None:
@@ -42,31 +44,29 @@ def listing(store, connection, viewer_id=None):
     return result
 
 
-def editable(store, connection, token, version):
-    person = store.lookup(connection, token)
+def editable(store, session, token, version):
+    person = store.lookup(session, token)
     if person.get('role') not in PRESENTER_ROLES:
         raise ValueError('Your invitation does not allow presentation submissions. Please contact Aabhash.')
-    current = own(connection, person['id'])
+    current = own(session, person['id'])
     if version != current.get('version', ''):
         raise ValueError('This presentation changed in another window. Reload the Agenda page before saving.')
     return person, current
 
 
-def write(connection, participant_id, proposal):
+def write(session, participant_id, proposal):
     data = {key:value for key,value in proposal.items() if key != 'files'}
     data.update(version=secrets.token_hex(16), updated_at=seminar.now())
-    connection.execute('INSERT INTO presentations VALUES (?, ?) ON CONFLICT(participant_id) DO UPDATE SET data=excluded.data',
-                       (participant_id, json.dumps(data)))
-    return own(connection, participant_id)
+    session.merge(Presentation(participant_id=participant_id, data=data))
+    return own(session, participant_id)
 
 
 def save(store, token, proposal, version='', remove=False):
-    with store.connect() as connection:
-        connection.execute('BEGIN IMMEDIATE')
-        person, current = editable(store, connection, token, version)
+    with store.session(write=True) as session:
+        person, current = editable(store, session, token, version)
         if remove:
-            connection.execute('DELETE FROM presentation_files WHERE participant_id=?', (person['id'],))
-            connection.execute('DELETE FROM presentations WHERE participant_id=?', (person['id'],))
+            session.execute(delete(PresentationFile).where(PresentationFile.participant_id == person['id']))
+            session.execute(delete(Presentation).where(Presentation.participant_id == person['id']))
             return {}
         if not isinstance(proposal, dict):
             raise ValueError('Enter your presentation details.')
@@ -99,13 +99,12 @@ def save(store, token, proposal, version='', remove=False):
             url = urlparse(data[key])
             if url.scheme != 'https' or not url.hostname or url.username or url.password or any(c.isspace() for c in data[key]):
                 raise ValueError('Use a full HTTPS link for presentation materials.')
-        return write(connection, person['id'], data)
+        return write(session, person['id'], data)
 
 
 def upload(store, token, kind, name, content, version):
-    with store.connect() as connection:
-        connection.execute('BEGIN IMMEDIATE')
-        person, talk = editable(store, connection, token, version)
+    with store.session(write=True) as session:
+        person, talk = editable(store, session, token, version)
         if not talk:
             raise ValueError('Save a talk title before uploading materials.')
         if kind not in ('explainer', 'slides') or not isinstance(name, str) or not 1 <= len(name) <= 180 or any(c in name for c in '/\\\r\n\x00'):
@@ -130,20 +129,20 @@ def upload(store, token, kind, name, content, version):
             mime = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
         else:
             raise ValueError('Explainers accept HTML or PDF. Slides accept PDF or PPTX.')
-        connection.execute('DELETE FROM presentation_files WHERE participant_id=? AND kind=?', (person['id'], kind))
-        connection.execute('INSERT INTO presentation_files VALUES (?, ?, ?, ?, ?, ?)',
-                           (secrets.token_hex(24), person['id'], kind, name, mime, content))
-        return write(connection, person['id'], talk)
+        session.execute(delete(PresentationFile).where(PresentationFile.participant_id == person['id'], PresentationFile.kind == kind))
+        session.add(PresentationFile(id=secrets.token_hex(24), participant_id=person['id'], kind=kind, name=name, mime=mime, content=content))
+        return write(session, person['id'], talk)
 
 
 def material(store, token, file_id):
-    with store.connect() as connection:
-        connection.execute('BEGIN')
-        store.lookup(connection, token)
-        row = connection.execute('SELECT f.name, f.mime, f.content, i.data FROM presentation_files f JOIN invitations i ON i.id=f.participant_id WHERE f.id=?', (file_id,)).fetchone()
+    with store.session() as session:
+        store.lookup(session, token)
+        row = session.execute(select(PresentationFile.name, PresentationFile.mime, PresentationFile.content, Invitation.data)
+                                 .join(Invitation, Invitation.id == PresentationFile.participant_id)
+                                 .where(PresentationFile.id == file_id)).first()
         if not row:
             raise ValueError('This material is no longer available.')
-        owner = json.loads(row[3])
+        owner = row[3]
         if not owner['active'] or owner.get('role') not in PRESENTER_ROLES:
             raise ValueError('This material is no longer available.')
         return dict(name=row[0], mime=row[1], content=row[2])

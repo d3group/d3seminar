@@ -5,11 +5,13 @@ import importlib.util
 import io
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
 SPEC = importlib.util.spec_from_file_location('seminar', Path(__file__).parents[1] / 'scripts/seminar.py')
 seminar = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(seminar)
@@ -76,6 +78,20 @@ class SeminarTests(unittest.TestCase):
         self.assertNotEqual(before['revision'], after['revision'])
         self.assertEqual(after['deliveries'], {})
 
+    def test_preparation_reuses_staged_csv_tokens_and_accepts_phd_label(self):
+        config = copy.deepcopy(CONFIG)
+        config['test_mode'] = False
+        seminar.CONFIG.write_text(json.dumps(config))
+        roster = seminar.PRIVATE / 'participants.csv'
+        roster.write_text('name,email,role,id,token\nNew,new@example.org,PhD,' + 'b'*24 + ',' + 'B'*43 + '\n')
+        seminar.prepare(argparse.Namespace(csv=None))
+        invite = self.invites()[0]
+        self.assertEqual((invite['id'], invite['token'], invite['role']), ('b'*24, 'B'*43, 'student'))
+        roster.write_text(roster.read_text().replace('B'*43, 'C'*43))
+        with self.assertRaisesRegex(ValueError, 'preserve the existing'):
+            seminar.prepare(argparse.Namespace(csv=None))
+        self.assertEqual(self.invites()[0], invite)
+
     def test_test_mode_rejects_another_recipient_without_changing_state(self):
         before = self.invites()
         (seminar.PRIVATE / 'participants.csv').write_text('name,email,slot_id\nOther,other@example.com,test-session\n')
@@ -85,43 +101,42 @@ class SeminarTests(unittest.TestCase):
 
     def test_personal_mail_contains_fragment_link_and_no_backend_secret(self):
         local = seminar.settings()
-        mail = seminar.message(CONFIG, local, self.invites()[0], 'invite')
-        self.assertEqual(mail['To'], ADDRESS)
-        self.assertIn(ADDRESS, mail['From'])
-        self.assertTrue(mail['Subject'].startswith('[TEST]'))
-        plain = mail.get_body(preferencelist=('plain',)).get_content()
+        mail = seminar.message_content(CONFIG, local, self.invites()[0], 'invite')
+        self.assertEqual(mail['to'], ADDRESS)
+        self.assertTrue(mail['subject'].startswith('[TEST]'))
+        plain = mail['body']
         self.assertIn('#token=', plain)
         self.assertIn('Europe/Berlin', plain)
         self.assertNotIn(local['admin_secret'], str(mail))
-        html_body = mail.get_body(preferencelist=('html',)).get_content()
+        html_body = mail['html']
         self.assertIn('<p ', html_body)
         self.assertIn('<br>', html_body)
         self.assertIn('>Open your personal invitation</a>', html_body)
 
     def test_confirmation_has_calendar_attachment(self):
-        mail = seminar.message(CONFIG, seminar.settings(), self.invites()[0], 'confirm', {'final_event':seminar.event_data(CONFIG, CONFIG['slots'][0])})
-        attachments = list(mail.iter_attachments())
-        self.assertEqual(attachments[0].get_filename(), 'd3-seminar.ics')
-        self.assertIn(b'STATUS:CONFIRMED', attachments[0].get_payload(decode=True))
-        self.assertIn(b'DTSTART:20261009T120000Z', attachments[0].get_payload(decode=True))
-        self.assertIn(b'DTEND:20261009T140000Z', attachments[0].get_payload(decode=True))
+        mail = seminar.message_content(CONFIG, seminar.settings(), self.invites()[0], 'confirm', {'final_event':seminar.event_data(CONFIG, CONFIG['slots'][0])})
+        attachments = mail['attachments']
+        self.assertEqual(attachments[0]['name'], 'd3-seminar.ics')
+        self.assertIn(b'STATUS:CONFIRMED', attachments[0]['content'].encode())
+        self.assertIn(b'DTSTART:20261009T120000Z', attachments[0]['content'].encode())
+        self.assertIn(b'DTEND:20261009T140000Z', attachments[0]['content'].encode())
 
     def test_timing_emails_and_student_presentation_nudges_are_separate(self):
         for role in ('student', 'professor', ''):
             invite = dict(self.invites()[0], role=role)
             for kind in ('invite', 'remind', 'confirm'):
-                mail = seminar.message(CONFIG, seminar.settings(), invite, kind,
+                mail = seminar.message_content(CONFIG, seminar.settings(), invite, kind,
                     {'final_event':seminar.event_data(CONFIG, CONFIG['slots'][0])})
-                self.assertNotIn('agenda.html?present=', mail.get_body(preferencelist=('plain',)).get_content())
+                self.assertNotIn('agenda.html?present=', mail['body'])
             if role != 'student':
                 with self.assertRaises(ValueError):
-                    seminar.message(CONFIG, seminar.settings(), invite, 'present')
+                    seminar.message_content(CONFIG, seminar.settings(), invite, 'present')
             else:
-                mail = seminar.message(CONFIG, seminar.settings(), invite, 'present', later=[dict(id='seminar-2', name='Seminar 2')])
-                plain = mail.get_body(preferencelist=('plain',)).get_content()
+                mail = seminar.message_content(CONFIG, seminar.settings(), invite, 'present', later=[dict(id='seminar-2', name='Seminar 2')])
+                plain = mail['body']
                 self.assertIn('agenda.html?present=seminar-1#token=', plain)
                 self.assertIn('provisional title', plain)
-                self.assertIn('Reserve Seminar 2</a>', mail.get_body(preferencelist=('html',)).get_content())
+                self.assertIn('Reserve Seminar 2</a>', mail['html'])
 
     def test_reminder_and_confirmation_target_correct_states(self):
         invite = self.invites()[0]
@@ -141,11 +156,11 @@ class SeminarTests(unittest.TestCase):
         self.assertEqual(seminar.eligible(invite, response, 'remind'), 'remind:' + invite['revision'])
         self.assertFalse(seminar.eligible(invite, response, 'check'))
         with self.assertRaises(ValueError):
-            seminar.message(CONFIG, seminar.settings(), invite, 'check')
+            seminar.message_content(CONFIG, seminar.settings(), invite, 'check')
 
     def test_calendar_cannot_be_sent_before_finalization(self):
         with self.assertRaisesRegex(ValueError, 'Finalize'):
-            seminar.message(CONFIG, seminar.settings(), self.invites()[0], 'confirm')
+            seminar.message_content(CONFIG, seminar.settings(), self.invites()[0], 'confirm')
 
 
     def test_backend_cannot_send_admin_secret_to_another_host(self):
@@ -186,7 +201,7 @@ class SeminarTests(unittest.TestCase):
             self.assertNotEqual(second['revision'], first['revision'])
             self.assertEqual(second['deliveries'], {})
             self.assertIn('event=seminar-2#token=', seminar.invitation_url(config, second))
-            self.assertIn('event=seminar-2#token=', seminar.message(config, seminar.settings(), second, 'invite').get_body(preferencelist=('plain',)).get_content())
+            self.assertIn('event=seminar-2#token=', seminar.message_content(config, seminar.settings(), second, 'invite')['body'])
         self.assertEqual(self.invites()[0], first)
 
     def test_onsite_mail_and_calendar_cover_both_dates(self):
@@ -195,12 +210,12 @@ class SeminarTests(unittest.TestCase):
             config = seminar.load_config()
             invite = seminar.load_invitations(config)[0]
             event = seminar.event_data(config, config['slots'][0])
-            mail = seminar.message(config, seminar.settings(), invite, 'confirm', {'final_event':event})
-            plain = mail.get_body(preferencelist=('plain',)).get_content()
+            mail = seminar.message_content(config, seminar.settings(), invite, 'confirm', {'final_event':event})
+            plain = mail['body']
             self.assertIn('Monday, 02 November 2026', plain)
             self.assertIn('Tuesday, 03 November 2026', plain)
-            self.assertIn('onsite meeting', str(mail['Subject']))
-            calendar = next(mail.iter_attachments()).get_payload(decode=True)
+            self.assertIn('onsite meeting', str(mail['subject']))
+            calendar = mail['attachments'][0]['content'].encode()
             self.assertIn(b'DTSTART:20261102T080000Z', calendar)
             self.assertIn(b'DTEND:20261103T160000Z', calendar)
             self.assertEqual(calendar.count(b'BEGIN:VEVENT'), 2)
@@ -237,15 +252,15 @@ class SeminarTests(unittest.TestCase):
         seminar.validate_poll(poll)
         invite = dict(self.invites()[0], poll=poll)
         event = seminar.event_data(config, config['slots'][0])
-        mail = seminar.message(config, seminar.settings(), invite, 'confirm', {'final_event':event})
-        plain = mail.get_body(preferencelist=('plain',)).get_content()
+        mail = seminar.message_content(config, seminar.settings(), invite, 'confirm', {'final_event':event})
+        plain = mail['body']
         self.assertIn('final day 09:00–13:00', plain)
-        calendar = next(mail.iter_attachments()).get_payload(decode=True)
+        calendar = mail['attachments'][0]['content'].encode()
         self.assertEqual(calendar.count(b'BEGIN:VEVENT'), 3)
         for line in [b'DTSTART:20261024T070000Z', b'DTEND:20261024T150000Z', b'DTSTART:20261025T080000Z',
                      b'DTEND:20261025T160000Z', b'DTSTART:20261026T080000Z', b'DTEND:20261026T120000Z']:
             self.assertIn(line, calendar)
-        invitation = seminar.message(config, seminar.settings(), invite, 'invite').get_body(preferencelist=('plain',)).get_content()
+        invitation = seminar.message_content(config, seminar.settings(), invite, 'invite')['body']
         self.assertIn('final day 09:00–13:00', invitation)
         self.assertNotIn('two consecutive days', invitation)
         bad = copy.deepcopy(poll)
