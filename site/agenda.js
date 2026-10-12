@@ -1,7 +1,6 @@
 import {apiFetch, loadConfig, apiUrl, serviceNotice} from './api.js';
-import {selectEvent, slotLabel, eventHref, preserveInvitationLinks, loadProgramme, renderProgramme, renderPresentationNudge, agendaSchedule, nextSeminar, eventDisclosure} from './shared.js';
+import {$, element, selectEvent, slotLabel, eventHref, preserveInvitationLinks, loadProgramme, renderProgramme, renderPresentationNudge, agendaSchedule, nextSeminar, eventDisclosure} from './shared.js';
 
-const $ = id => document.getElementById(id);
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
 preserveInvitationLinks(token);
 let config, entries = [], editingId, saving = false;
@@ -45,12 +44,6 @@ function showSaved(entry, removed) {
   const view = element('button', 'View in agenda', 'text-button');
   view.type = 'button'; view.addEventListener('click', closeEditor); status.append(view);
   status.focus({preventScroll:true}); status.scrollIntoView({block:'nearest'});
-}
-
-function element(tag, text, className) {
-  const node = document.createElement(tag); node.textContent = text;
-  if (className) node.className = className;
-  return node;
 }
 
 function materialsCell(event, talk, kind) {
@@ -276,19 +269,17 @@ function closeEditor() {
   [...document.querySelectorAll('[data-present]')].find(button => button.dataset.present === editingId)?.focus();
 }
 
-function updatePresentation(entry, talk) {
+function updatePresentation(entry, saved) {
   expandedEvents.set(entry.event.id, true);
-  entry.invitation.presentation = talk;
-  const others = (entry.invitation.presentations || []).filter(item => !item.mine);
-  if (talk.title) others.push({...talk, name:entry.invitation.name, mine:true});
-  entry.invitation.presentations = others.sort((a, b) => a.name.localeCompare(b.name));
+  entry.invitation.presentation = saved.presentation;
+  entry.invitation.presentations = saved.presentations;
   currentFiles(); renderAgendas();
 }
 
 async function result(response) {
   const data = await response.json();
   if (!response.ok || !data.ok) throw new Error(data.error || 'Your presentation could not be saved. Please try again.');
-  return data.presentation;
+  return data;
 }
 
 async function savePresentation(remove = false) {

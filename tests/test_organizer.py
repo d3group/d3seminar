@@ -35,11 +35,33 @@ class OrganizerTests(unittest.TestCase):
 
     def answer(self):
         invitation = self.store.invitation(self.token)
-        self.store.respond(dict(token=self.token, revision=invitation['revision'], comment='Keep my note',
+        self.store.respond(dict(token=self.token, revision=invitation['revision'], response_version=invitation['response_version'], comment='Keep my note',
             **{'answer:' + invitation['poll']['slots'][0]['id']:'available'}))
 
     def schedule(self):
         return dict(deadline='2026-10-08T17:00', options=[dict(id=s['id'], start=s['start'][:16]) for s in self.poll['slots']])
+
+    def test_failed_config_reload_keeps_the_last_valid_settings(self):
+        before = copy.deepcopy(self.organizer.config)
+        invalid_poll = copy.deepcopy(before)
+        invalid_poll['events'][-1]['slots'] = []
+        failures = [(None, FileNotFoundError), ('{', json.JSONDecodeError), ('{}', ValueError),
+                    (json.dumps(dict(before, events=[])), ValueError),
+                    (json.dumps(dict(before, test_mode='false')), ValueError),
+                    (json.dumps(invalid_poll), ValueError)]
+        for case, (content, error) in enumerate(failures):
+            with self.subTest(case=case):
+                if content is None:
+                    self.config_file.unlink()
+                else:
+                    self.config_file.write_text(content)
+                with self.assertRaises(error):
+                    self.organizer.reload_config()
+                self.assertEqual(self.organizer.config, before)
+        replacement = dict(before, subtitle='Updated after a failed reload')
+        self.config_file.write_text(json.dumps(replacement))
+        self.organizer.reload_config()
+        self.assertEqual(self.organizer.config, replacement)
 
     def test_deadline_edit_preserves_answers_links_and_delivery_history(self):
         self.answer()

@@ -57,9 +57,20 @@ class Organizer:
         return self.stores[event_id].database.parent
 
     def reload_config(self):
+        replacement = seminar.read_json(self.config_file)
+        if not isinstance(replacement, dict) or not isinstance(replacement.get('test_mode'), bool):
+            raise ValueError('Set test_mode explicitly to true or false.')
+        events = replacement.get('events')
+        if not isinstance(events, list) or not events:
+            raise ValueError('Provide at least one event in the programme.')
+        for event in events:
+            seminar.validate_poll(seminar.poll_data(seminar.event_config(replacement, event['id'])))
         local = {key:self.config[key] for key in ('site_url', 'api_url', 'backend_url') if key in self.config}
-        self.config.clear()
-        self.config.update(seminar.read_json(self.config_file), **local)
+        replacement.update(local)
+        seminar.validate_site_url(replacement['site_url'])
+        if replacement.get('api_url'):
+            seminar.validate_api_url(replacement['api_url'])
+        self.config = replacement
 
     def records(self, event_id):
         records = seminar.read_json(self.directory(event_id) / 'invitations.json')

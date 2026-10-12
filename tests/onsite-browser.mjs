@@ -100,6 +100,7 @@ try {
   await page.route('**/config.json', async route => {
     const response = await route.fetch();
     const config = await response.json();
+    config.api_url = '';
     config.backend_url = '';
     config.events.find(event => event.id === 'onsite').slots = [
       {id:'week-wrap', start:'2027-04-18T09:00:00+02:00', end:'2027-04-20T13:00:00+02:00'},

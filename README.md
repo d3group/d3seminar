@@ -14,3 +14,7 @@ Email types:
 - **Reminder:** Follows up with people who have not finished responding.
 - **Presentation request:** Talk proposal for the next seminar or a provisional title for a later seminar.
 - **Date confirmation:** Announces the finalized time and includes a calendar invitation.
+
+[Setup guide](SETUP.md)
+
+Licensed under the [GNU General Public License v3.0](LICENSE).

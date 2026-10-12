@@ -1,4 +1,5 @@
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import http.client
 import json
 from pathlib import Path
@@ -6,13 +7,14 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
 import seminar
 import presentations
 from waitress.wasyncore import close_all
-from server import Store, create_server, receipt
+from server import Store, create_server, receipt, response_version
 
 TOKEN = 'A' * 43
 POLL = json.loads((Path(__file__).parent / 'fixtures/programme.json').read_text())
@@ -20,7 +22,8 @@ POLL = seminar.poll_data(POLL)
 SLOT = POLL['slots'][0]['id']
 INVITE = dict(id='a' * 24, name='Ada', email='ada@example.com', token_hash=seminar.digest(TOKEN),
               revision=seminar.event_revision(POLL), poll=POLL, site_url='http://127.0.0.1:8765/')
-RESPONSE = dict(token=TOKEN, revision=INVITE['revision'], comment='', **{'answer:' + SLOT:'available'})
+RESPONSE = dict(token=TOKEN, revision=INVITE['revision'], comment='',
+                response_version=response_version(dict(answers={}, comment='', updated_at='')), **{'answer:' + SLOT:'available'})
 
 
 class StoreTests(unittest.TestCase):
@@ -34,8 +37,9 @@ class StoreTests(unittest.TestCase):
         saved = self.store.respond(RESPONSE)
         self.store = Store(self.store.database)
         self.assertEqual(self.store.invitation(TOKEN)['answers'], {SLOT:'available'})
-        self.assertEqual(self.store.respond(RESPONSE)['updated_at'], saved['updated_at'])
-        self.store.respond(dict(RESPONSE, comment='Monday morning.', **{'answer:' + SLOT:'unavailable'}))
+        current = dict(RESPONSE, response_version=self.store.invitation(TOKEN)['response_version'])
+        self.assertEqual(self.store.respond(current)['updated_at'], saved['updated_at'])
+        self.store.respond(dict(current, comment='Monday morning.', **{'answer:' + SLOT:'unavailable'}))
         self.assertEqual(len(self.store.responses()), 1)
         self.assertEqual(self.store.invitation(TOKEN)['comment'], 'Monday morning.')
 
@@ -70,6 +74,51 @@ class StoreTests(unittest.TestCase):
         self.store.select('finalize', SLOT, self.store.dashboard()['snapshot'])
         with self.assertRaisesRegex(ValueError, 'finalized'):
             self.store.respond(edit)
+
+    def test_stale_full_form_cannot_overwrite_a_newer_calendar_response(self):
+        opened = self.store.invitation(TOKEN)
+        stale = dict(RESPONSE, response_version=opened['response_version'], comment='An older draft',
+                     **{'answer:' + SLOT:'unavailable'})
+        self.store.respond(dict(RESPONSE, partial='true'))
+        newer = self.store.invitation(TOKEN)
+        for params in (stale, {key:value for key,value in stale.items() if key != 'response_version'}):
+            with self.subTest(version_supplied='response_version' in params), self.assertRaisesRegex(ValueError, 'out of date'):
+                self.store.respond(params)
+            self.assertEqual(self.store.invitation(TOKEN), newer)
+        self.assertNotEqual(opened['response_version'], newer['response_version'])
+        self.store = Store(self.store.database)
+        self.assertEqual(self.store.invitation(TOKEN)['response_version'], newer['response_version'])
+        current = dict(stale, response_version=newer['response_version'])
+        self.store.respond(current)
+        saved = self.store.invitation(TOKEN)
+        self.assertEqual(saved['answers'], {SLOT:'unavailable'})
+        self.assertEqual(saved['comment'], 'An older draft')
+        self.store.respond(dict(current, response_version=saved['response_version']))
+        self.assertEqual(self.store.invitation(TOKEN)['response_version'], saved['response_version'])
+
+    def test_simultaneous_full_forms_cannot_both_replace_the_same_response(self):
+        version = self.store.invitation(TOKEN)['response_version']
+        ready = threading.Barrier(2)
+        def save(answer):
+            ready.wait(timeout=5)
+            try:
+                self.store.respond(dict(RESPONSE, response_version=version, **{'answer:' + SLOT:answer}))
+                return 'saved', answer
+            except ValueError as error:
+                return 'conflict', str(error)
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            results = list(workers.map(save, ['available', 'unavailable']))
+        self.assertEqual(sorted(status for status, _ in results), ['conflict', 'saved'])
+        winner = next(answer for status, answer in results if status == 'saved')
+        self.assertEqual(self.store.invitation(TOKEN)['answers'], {SLOT:winner})
+
+    def test_a_newer_note_also_makes_an_old_full_form_stale(self):
+        opened = self.store.invitation(TOKEN)
+        params = dict(RESPONSE, response_version=opened['response_version'])
+        self.store.respond(dict(params, comment='The new note'))
+        with self.assertRaisesRegex(ValueError, 'out of date'):
+            self.store.respond(params)
+        self.assertEqual(self.store.invitation(TOKEN)['comment'], 'The new note')
 
     def test_sync_preserves_unchanged_response_and_revokes_removed_participant(self):
         self.store.respond(RESPONSE)
@@ -226,7 +275,8 @@ class GroupSchedulingTests(unittest.TestCase):
 
     def answer(self, index, value='available', all_slots=False):
         slots = self.poll['slots'] if all_slots else self.poll['slots'][:1]
-        return self.store.respond(dict(token=self.tokens[index], revision=self.revision, **{'answer:' + s['id']:value for s in slots}))
+        version = self.store.invitation(self.tokens[index])['response_version']
+        return self.store.respond(dict(token=self.tokens[index], revision=self.revision, response_version=version, **{'answer:' + s['id']:value for s in slots}))
 
     def choose(self, action='finalize'):
         return self.store.select(action, SLOT, self.store.dashboard()['snapshot'])
@@ -299,7 +349,8 @@ class GroupSchedulingTests(unittest.TestCase):
         dashboard = self.store.dashboard()
         self.assertEqual(dashboard['completed'], 0)
         self.assertEqual(dashboard['slots'][1]['unknown'], 20)
-        self.store.respond(dict(token=self.tokens[0], revision=self.revision, **{'answer:' + SLOT:''}))
+        version = self.store.invitation(self.tokens[0])['response_version']
+        self.store.respond(dict(token=self.tokens[0], revision=self.revision, response_version=version, **{'answer:' + SLOT:''}))
         self.assertEqual(self.store.invitation(self.tokens[0])['answers'], {})
 
     def test_role_capacity_is_validated_without_changing_saved_answers(self):
@@ -338,6 +389,50 @@ class HTTPTests(unittest.TestCase):
         connection.close()
         return result
 
+    def test_requests_keep_complete_config_during_reload_and_receive_the_replacement(self):
+        app = self.server.d3_app
+        original = dict(app.config)
+        previous = app.config
+        replacement = dict(original, subtitle='Reloaded settings')
+        replacement.pop('description', None)
+        previous['description'] = 'Removed setting'
+        local = {key:previous[key] for key in ('site_url', 'api_url', 'backend_url') if key in previous}
+        replacement.update(site_url='https://file.example/', api_url='https://api.example/', backend_url='https://api.example/api/respond')
+        app.organizer.config_file.write_text(json.dumps(replacement))
+        reading, resume = threading.Event(), threading.Event()
+        read_json = seminar.read_json
+        def paused_read(path):
+            if path == app.organizer.config_file:
+                reading.set()
+                if not resume.wait(10):
+                    raise TimeoutError('Reload was not released')
+            return read_json(path)
+        try:
+            with patch.object(seminar, 'read_json', side_effect=paused_read), ThreadPoolExecutor() as pool:
+                reload = pool.submit(app.organizer.reload_config)
+                try:
+                    self.assertTrue(reading.wait(5))
+                    requests = [pool.submit(self.request, 'GET', '/config.json') for _ in range(4)]
+                    for request in requests:
+                        status, body = request.result(timeout=5)
+                        self.assertEqual(status, 200)
+                        self.assertEqual(json.loads(body), dict(original, description='Removed setting'))
+                    status, body = self.request('POST', '/api/public-event', '{"event_id":"onsite"}', {'Content-Type':'application/json'})
+                    self.assertEqual(status, 200)
+                    self.assertTrue(json.loads(body)['poll']['slots'])
+                finally:
+                    resume.set()
+                reload.result(timeout=5)
+            status, body = self.request('GET', '/config.json')
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body), dict(replacement, **local))
+            self.assertEqual(previous, dict(original, description='Removed setting'))
+        finally:
+            previous.clear()
+            previous.update(original)
+            app.organizer.config = previous
+            app.organizer.config_file.write_text(json.dumps(original))
+
     def test_event_api_keeps_answers_finalization_and_calendar_separate(self):
         config = seminar.event_config(self.server.d3_app.config, 'seminar-2')
         poll = seminar.poll_data(config)
@@ -348,7 +443,8 @@ class HTTPTests(unittest.TestCase):
             return self.request('POST', '/api/admin', json.dumps(dict(event_id='seminar-2', secret='secret'*8, **data)), headers)
         self.assertEqual(admin(action='sync', invites=[invite])[0], 200)
         prior = self.store.invitation(TOKEN)
-        response = dict(token=TOKEN, revision=revision, event_id='seminar-2', **{'answer:' + poll['slots'][0]['id']:'available'})
+        version = self.server.d3_app.stores['seminar-2'].invitation(TOKEN)['response_version']
+        response = dict(token=TOKEN, revision=revision, event_id='seminar-2', response_version=version, **{'answer:' + poll['slots'][0]['id']:'available'})
         status, _ = self.request('POST', '/api/respond', urlencode(response), {'Content-Type':'application/x-www-form-urlencoded'})
         self.assertEqual(status, 200)
         status, body = self.request('POST', '/api/invitation', json.dumps(dict(token=TOKEN, event_id='seminar-2', include_votes=True)), headers)
@@ -463,14 +559,16 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(list(connection.iterdump()), before)
 
     def test_real_form_post_writes_sqlite_before_success_receipt(self):
-        status, body = self.request('POST', '/api/respond', urlencode(RESPONSE), {'Content-Type':'application/x-www-form-urlencoded'})
+        current = dict(RESPONSE, response_version=self.store.invitation(TOKEN)['response_version'])
+        status, body = self.request('POST', '/api/respond', urlencode(current), {'Content-Type':'application/x-www-form-urlencoded'})
         self.assertEqual(status, 200)
         self.assertIn('Response saved.', body)
         self.assertEqual(self.store.invitation(TOKEN)['answers'], {SLOT:'available'})
 
     def test_fetch_save_returns_committed_answers_and_rejects_stale_forms_as_json(self):
         headers = {'Content-Type':'application/x-www-form-urlencoded', 'Accept':'application/json'}
-        status, body = self.request('POST', '/api/respond', urlencode(RESPONSE), headers)
+        current = dict(RESPONSE, response_version=self.store.invitation(TOKEN)['response_version'])
+        status, body = self.request('POST', '/api/respond', urlencode(current), headers)
         self.assertEqual(status, 200)
         saved = json.loads(body)
         self.assertTrue(saved['ok'])

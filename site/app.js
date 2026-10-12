@@ -1,7 +1,6 @@
 import {apiFetch, loadConfig, apiUrl, serviceNotice} from './api.js';
-import {selectEvent, slotLabel, durationLabel, dailyHoursLabel, preserveInvitationLinks, eventHref, answeredCount, eventFinished, nextEvent, loadProgramme, programmeProgress, showSavedResponse, renderProgramme} from './shared.js';
+import {$, selectEvent, slotLabel, durationLabel, dailyHoursLabel, preserveInvitationLinks, eventHref, answeredCount, eventFinished, nextEvent, loadProgramme, programmeProgress, showSavedResponse, renderProgramme} from './shared.js';
 preserveInvitationLinks(new URLSearchParams(location.hash.slice(1)).get('token'));
-const $ = id => document.getElementById(id);
 let config, poll, token, programme = [], saving = false;
 const eventId = new URLSearchParams(location.search).get('event') || 'seminar-1';
 const choices = [['available', 'Available'], ['unavailable', 'Unavailable']];
@@ -69,6 +68,7 @@ async function saveResponse(event) {
     if (!response.ok || !saved.ok) throw new Error(saved.error || 'Your response could not be saved. Please try again.');
     const current = programme.find(entry => entry.event.id === eventId);
     Object.assign(current.invitation, saved);
+    $('response-version').value = saved.response_version;
     $('comment').value = saved.comment;
     $('status-pill').textContent = 'Saved';
     renderJourney();
@@ -177,6 +177,7 @@ async function start() {
   $('greeting').textContent = `Hello ${invitation.name}. Please mark all the times that work for you.`;
   $('response-form').action = apiUrl('respond');
   $('token').value = token; $('revision').value = invitation.revision;
+  $('response-version').value = invitation.response_version;
   $('comment').value = invitation.comment;
   const state = invitation.state;
   if (state.final_event) {

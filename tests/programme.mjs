@@ -1,10 +1,47 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {answeredCount, responseComplete, nextEvent, nextSeminar, voteCounts, participantRings, ringArc, calendarDay, durationLabel, slotLabel, onsiteDays, agendaSchedule} from '../site/shared.js';
+import {answeredCount, responseComplete, nextEvent, nextSeminar, voteCounts, participantRings, ringArc, calendarDay, durationLabel, slotLabel, onsiteDays, agendaSchedule, presentationProgress} from '../site/shared.js';
 
 const poll = {required_participants:20, slots:[{id:'a'}, {id:'b'}]};
 const invitation = (answers = {}, state = {}) => ({poll, answers, state});
 const entry = (id, answers = {}, state = {}) => ({event:{id}, invitation:invitation(answers, state)});
+
+test('saved titles count as proposals while missing abstracts remain details to follow', () => {
+  const entries = ['seminar-1', 'seminar-2', 'seminar-3', 'onsite'].map(id => ({
+    event:{id, kind:id === 'onsite' ? 'onsite' : 'seminar'}, invitation:{role:'student', presentation:{}}
+  }));
+  let progress = presentationProgress(entries);
+  assert.equal(progress.seminar, false);
+  assert.equal(progress.onsite, false);
+  assert.equal(progress.next, 'seminar-1');
+  entries[2].invitation.presentation = {title:'Provisional research topic', status:'placeholder'};
+  progress = presentationProgress(entries);
+  assert.equal(progress.seminar, true);
+  assert.equal(progress.seminarDetailsPending, true);
+  assert.equal(progress.next, 'onsite');
+  entries[3].invitation.presentation = {title:'Onsite discussion', abstract:''};
+  progress = presentationProgress(entries);
+  assert.equal(progress.seminar, true);
+  assert.equal(progress.onsite, true);
+  assert.equal(progress.onsiteDetailsPending, true);
+  assert.match(progress.text, /proposals are saved/);
+  assert.doesNotMatch(progress.text, /Please propose|Please add/);
+  entries[2].invitation.presentation.abstract = 'A provisional abstract.';
+  entries[3].invitation.presentation.abstract = 'An onsite abstract.';
+  progress = presentationProgress(entries);
+  assert.equal(progress.seminarDetailsPending, false);
+  assert.equal(progress.onsiteDetailsPending, false);
+  entries[0].invitation.presentation = {title:'Another idea'};
+  assert.equal(presentationProgress(entries).seminarDetailsPending, true);
+  entries[0].invitation.presentation = {};
+  entries[2].invitation.presentation = {};
+  progress = presentationProgress(entries);
+  assert.equal(progress.seminar, false);
+  assert.equal(progress.seminarDetailsPending, false);
+  assert.equal(progress.onsite, true);
+  assert.equal(progress.next, 'seminar-1');
+  assert.equal(presentationProgress(entries.map(entry => ({...entry, invitation:{...entry.invitation, role:'professor'}}))), null);
+});
 
 test('the next seminar follows meeting dates, including finalized dates, rather than poll completion', () => {
   const slot = day => ({start:`${day}T14:00:00+01:00`, end:`${day}T16:00:00+01:00`});

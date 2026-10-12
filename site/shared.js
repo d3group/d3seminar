@@ -1,4 +1,13 @@
 import {apiFetch} from './api.js';
+
+export const $ = id => document.getElementById(id);
+
+export function element(tag, text, className) {
+  const node = document.createElement(tag); node.textContent = text;
+  if (className) node.className = className;
+  return node;
+}
+
 export function selectEvent(config, id = 'seminar-1') {
   const event = config.events.find(event => event.id === id);
   if (!event) throw new Error('This event could not be found. Return to the programme to choose an event.');
@@ -69,10 +78,6 @@ export function eventTimeline(container, events, initialId) {
     container.scrollTo({left:position * step(), behavior:reduced.matches ? 'instant' : behavior});
     update();
   }
-  function show(id, behavior) {
-    const target = events.findIndex(event => event.id === id);
-    if (target >= 0) move(target, behavior);
-  }
   wrapper.addEventListener('keydown', event => {
     if (event.target !== container && !arrows.contains(event.target)) return;
     const target = {ArrowLeft:index - count(), ArrowRight:index + count(), Home:0, End:last()}[event.key];
@@ -101,7 +106,7 @@ export function eventTimeline(container, events, initialId) {
     move(index, 'instant');
   }
   refresh();
-  return {show, refresh};
+  return {refresh};
 }
 
 export function durationLabel(event) {
@@ -284,16 +289,18 @@ export async function loadProgramme(config, token, includeVotes = false, include
 export function presentationProgress(entries) {
   const student = entries.filter(entry => entry.invitation?.role === 'student');
   if (!student.length) return null;
-  const complete = entry => Boolean(entry.invitation.presentation?.title && entry.invitation.presentation?.abstract);
+  const proposed = entry => Boolean(entry.invitation.presentation?.title);
+  const detailsPending = entry => proposed(entry) && !entry.invitation.presentation.abstract;
   const seminars = student.filter(entry => entry.event.kind === 'seminar');
   const onsite = student.find(entry => entry.event.kind === 'onsite');
-  const seminar = seminars.some(complete), onsiteDone = Boolean(onsite && complete(onsite));
-  const next = !seminar ? seminars.find(entry => entry.invitation.presentation?.title) || seminars[0] : !onsiteDone ? onsite : seminars.find(complete);
-  const text = seminar && onsiteDone ? 'Your seminar and onsite proposals are saved. You can add materials later.'
-    : seminar ? 'Please add a title and abstract for your onsite presentation.'
+  const seminar = seminars.some(proposed), onsiteDone = Boolean(onsite && proposed(onsite));
+  const next = !seminar ? seminars[0] : !onsiteDone ? onsite : seminars.find(proposed);
+  const text = seminar && onsiteDone ? 'Your seminar and onsite proposals are saved. You can add details and materials later.'
+    : seminar ? 'Please propose a talk for the onsite.'
     : onsiteDone ? 'Please propose a talk for at least one of the three seminars.'
     : 'Please propose a talk for at least one of the three seminars and for the onsite.';
-  return {seminar, onsite:onsiteDone, next:next?.event.id, text};
+  return {seminar, onsite:onsiteDone, next:next?.event.id, text,
+    seminarDetailsPending:seminars.some(detailsPending), onsiteDetailsPending:Boolean(onsite && detailsPending(onsite))};
 }
 
 export function renderPresentationNudge(container, entries, token) {
@@ -304,7 +311,8 @@ export function renderPresentationNudge(container, entries, token) {
   const title = document.createElement('h2'); title.textContent = 'Your presentations';
   const text = document.createElement('p'); text.textContent = progress.text;
   const steps = document.createElement('p'); steps.className = 'presentation-milestones';
-  steps.textContent = `Seminar proposal: ${progress.seminar ? 'added' : 'to add'} · Onsite proposal: ${progress.onsite ? 'added' : 'to add'}`;
+  const status = (added, pending) => !added ? 'to add' : pending ? 'added (details to follow)' : 'added';
+  steps.textContent = `Seminar proposal: ${status(progress.seminar, progress.seminarDetailsPending)} · Onsite proposal: ${status(progress.onsite, progress.onsiteDetailsPending)}`;
   copy.append(title, text, steps);
   const link = document.createElement('a'); link.className = 'text-link';
   link.href = 'agenda.html' + (progress.next ? '?' + new URLSearchParams({present:progress.next}) : '') + '#' + new URLSearchParams({token});

@@ -7,16 +7,11 @@ from email.utils import formataddr, formatdate, make_msgid
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlparse
-from urllib.request import Request, HTTPRedirectHandler, build_opener
+from urllib.request import Request, build_opener
 
 import seminar
 
 PRIVATE = Path(os.environ.get('D3_MAIL_DIR', seminar.ROOT / '.mailer'))
-
-
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        return None
 
 
 def api(settings, action, **data):
@@ -27,7 +22,7 @@ def api(settings, action, **data):
     request = Request(base + 'api/admin', data=json.dumps(dict(action=action, secret=settings['admin_secret'], **data)).encode(),
                       headers={'Content-Type':'application/json'})
     try:
-        with build_opener(NoRedirect).open(request, timeout=40) as response:
+        with build_opener(seminar.NoRedirect).open(request, timeout=40) as response:
             result = json.load(response)
     except HTTPError as error:
         try:

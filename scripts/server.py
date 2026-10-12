@@ -22,6 +22,14 @@ from organizer import Organizer, write_config
 ANSWERS = {'available', 'unavailable'}
 
 
+class ResponseConflict(ValueError):
+    pass
+
+
+def response_version(record):
+    return seminar.event_revision({key:record[key] for key in ('answers', 'comment', 'updated_at')})
+
+
 class Store:
     def __init__(self, database):
         self.database = Path(database)
@@ -137,6 +145,7 @@ class Store:
             connection.execute('BEGIN')
             record = self.lookup(connection, token)
             result = {key: record[key] for key in ('name', 'poll', 'revision', 'answers', 'comment', 'updated_at')}
+            result['response_version'] = response_version(record)
             result['state'] = seminar.programme_state(self.state(connection))
             result['role'] = record.get('role', '')
             result['presentation'] = presentations.own(connection, record['id']) if result['role'] in presentations.PRESENTER_ROLES else {}
@@ -179,6 +188,8 @@ class Store:
             state = self.state(connection)
             if state.get('final_event'):
                 raise ValueError('The seminar time is finalized. Please contact Aabhash if your availability has changed.')
+            if partial == 'false' and params.get('response_version') != response_version(record):
+                raise ResponseConflict('This form is out of date. Reload this page to review your saved availability before saving again.')
             ids = {slot['id'] for slot in record['poll']['slots']}
             answers = dict(record['answers']) if partial == 'true' else {}
             for key, value in params.items():
@@ -322,6 +333,10 @@ class Handler:
             raise ValueError('Unknown event.')
         return self.server.stores[event_id]
 
+    def reply_presentation(self, store, token):
+        current = store.invitation(token, include_presentations=True)
+        self.reply(200, dict(ok=True, presentation=current['presentation'], presentations=current['presentations']))
+
     def do_GET(self):
         if not self.trusted_request():
             return
@@ -357,9 +372,9 @@ class Handler:
                 raise ValueError('Request is empty or too large.')
             if route == '/api/presentation-upload':
                 store = self.event_store(dict(event_id=self.headers.get('X-Event-Id')))
-                result = presentations.upload(store, self.headers.get('X-Invitation-Token'), self.headers.get('X-Material-Kind'),
+                presentations.upload(store, self.headers.get('X-Invitation-Token'), self.headers.get('X-Material-Kind'),
                     unquote(self.headers.get('X-File-Name', '')), self.rfile.read(size), self.headers.get('X-Presentation-Version', ''))
-                self.reply(200, dict(ok=True, presentation=result))
+                self.reply_presentation(store, self.headers.get('X-Invitation-Token'))
                 return
             data = self.rfile.read(size).decode('utf-8')
             if route == '/api/material':
@@ -377,7 +392,11 @@ class Handler:
                 params = {key: values[0] for key, values in parse_qs(data, keep_blank_values=True).items()}
                 record = self.event_store(params).respond(params)
                 if wants_json:
-                    result = self.event_store(params).invitation(params['token'], include_votes=True) if params.get('partial') == 'true' else {key:record[key] for key in ('answers', 'comment', 'updated_at')}
+                    if params.get('partial') == 'true':
+                        result = self.event_store(params).invitation(params['token'], include_votes=True)
+                    else:
+                        result = {key:record[key] for key in ('answers', 'comment', 'updated_at')}
+                        result['response_version'] = response_version(record)
                     self.reply(200, dict(ok=True, **result))
                 else:
                     self.reply(200, receipt(record, params['token']), 'text/html; charset=utf-8')
@@ -399,8 +418,8 @@ class Handler:
                 self.reply(200, {'ok':True, **store.invitation(request.get('token'), include_votes=request.get('include_votes') is True,
                                                             include_presentations=request.get('include_presentations') is True)})
             elif route == '/api/presentation':
-                result = presentations.save(store, request.get('token'), request.get('presentation'), request.get('version', ''), remove=request.get('remove') is True)
-                self.reply(200, dict(ok=True, presentation=result))
+                presentations.save(store, request.get('token'), request.get('presentation'), request.get('version', ''), remove=request.get('remove') is True)
+                self.reply_presentation(store, request.get('token'))
             elif route == '/api/calendar':
                 invitation = store.invitation(request.get('token'))
                 event = invitation['state'].get('final_event')
@@ -444,10 +463,11 @@ class Handler:
                 self.reply(404, {'ok':False, 'error':'Not found.'})
         except (ValueError, KeyError, TypeError) as error:
             message = str(error) if isinstance(error, ValueError) else 'Invalid request.'
+            status = 409 if isinstance(error, ResponseConflict) else 400
             if is_form and not wants_json:
-                self.reply(400, page('Response not saved.', '<p>' + html.escape(message) + '</p><p>Return to your email invitation and try again.</p>'), 'text/html; charset=utf-8')
+                self.reply(status, page('Response not saved.', '<p>' + html.escape(message) + '</p><p>Return to your email invitation and try again.</p>'), 'text/html; charset=utf-8')
             else:
-                self.reply(400, {'ok':False, 'error':message})
+                self.reply(status, {'ok':False, 'error':message})
         except sqlite3.Error:
             self.reply(503, {'ok':False, 'error':'Response storage is unavailable. Please try again.'})
         except OSError:
@@ -465,22 +485,26 @@ def origins_for(base):
 
 class Application:
     def __init__(self, store=None, config=None, admin_secret=None, config_file=None, public_url=None):
-        self.config = config or seminar.load_config()
-        self.public_url = public_url or self.config.get('api_url')
+        config = config or seminar.load_config()
+        self.public_url = public_url or config.get('api_url')
         if self.public_url:
             seminar.validate_api_url(self.public_url)
-        seminar.validate_site_url(self.config['site_url'])
+        seminar.validate_site_url(config['site_url'])
         self.store = store or Store(seminar.PRIVATE / 'responses.sqlite3')
         self.stores = {'seminar-1':self.store}
-        for event in self.config.get('events', []):
-            seminar.event_config(self.config, event['id'])
+        for event in config.get('events', []):
+            seminar.event_config(config, event['id'])
             if event['id'] != 'seminar-1':
                 self.stores[event['id']] = Store(self.store.database.parent / 'events' / event['id'] / 'responses.sqlite3')
         self.admin_secret = admin_secret or seminar.settings()['admin_secret']
         config_file = config_file or (store.database.parent / 'config.json' if store else seminar.CONFIG)
         if not config_file.exists():
-            write_config(config_file, self.config)
-        self.organizer = Organizer(self.config, self.stores, config_file, self.store.database.parent)
+            write_config(config_file, config)
+        self.organizer = Organizer(config, self.stores, config_file, self.store.database.parent)
+
+    @property
+    def config(self):
+        return self.organizer.config
 
     def hosts(self):
         hosts = {f'localhost:{self.port}', f'127.0.0.1:{self.port}'}

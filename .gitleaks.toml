@@ -1,0 +1,16 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "d3-invitation-token"
+description = "D3 personal invitation token"
+regex = '''(?i)(?:[?#&]token=|["']?token["']?\s*[:=]\s*["'])([A-Za-z0-9_-]{43})'''
+secretGroup = 1
+entropy = 3.5
+
+[[rules]]
+id = "d3-organizer-secret"
+description = "D3 organizer access key"
+regex = '''(?i)(?:[?#&]key=|["']?admin_secret["']?\s*[:=]\s*["'])([A-Za-z0-9_-]{32,})'''
+secretGroup = 1
+entropy = 3.5

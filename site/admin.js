@@ -1,16 +1,10 @@
 import {apiFetch, loadConfig, serviceNotice} from './api.js';
-import {slotLabel, dailyHoursLabel} from './shared.js';
-const $ = id => document.getElementById(id);
+import {$, element, slotLabel, dailyHoursLabel} from './shared.js';
 const eventId = new URLSearchParams(location.search).get('event') || 'seminar-1';
 const secret = new URLSearchParams(location.hash.slice(1)).get('key');
 history.replaceState(null, '', location.pathname + location.search);
 let dashboard, schedulePreview;
 const names = {available:'Available', unavailable:'Unavailable'};
-function element(tag, text, className) {
-  const node = document.createElement(tag); node.textContent = text;
-  if (className) node.className = className;
-  return node;
-}
 function notice(text, error = false) {
   $('admin-notice').textContent = text; $('admin-notice').classList.toggle('error', error);
 }
@@ -188,8 +182,6 @@ async function start() {
     if (event.id === eventId) link.setAttribute('aria-current', 'page');
     $('event-tabs').append(link);
   }
-  document.querySelectorAll('.mail-steps dd code').forEach(code => {
-    code.textContent = code.textContent.replace('seminar.py ', `seminar.py --event ${eventId} `);
-  });
+  $('confirm-command').textContent = `python3 scripts/mailer.py confirm --event ${eventId}`;
   await refresh();
 }

@@ -356,7 +356,7 @@ def load_invitations(config):
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise ValueError('The API redirected. Set D3_API_URL to its final HTTPS address.')
+        raise ValueError('The API redirected. Set the API URL to its final HTTPS address.')
 
 
 def backend(config, action, **data):

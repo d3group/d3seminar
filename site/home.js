@@ -1,6 +1,5 @@
 import {apiFetch, loadConfig, serviceNotice} from './api.js';
-import {selectEvent, slotLabel, eventHref, durationLabel, preserveInvitationLinks, answeredCount, responseComplete, eventFinished, loadProgramme, nextEvent, nextSeminar, eventDisclosure, eventTimeline, programmeProgress, showSavedResponse, voteCounts, renderProgramme, participantRings, ringArc, calendarDay, renderPresentationNudge, onsiteDays} from './shared.js';
-const $ = id => document.getElementById(id);
+import {$, element, selectEvent, slotLabel, eventHref, durationLabel, preserveInvitationLinks, answeredCount, responseComplete, eventFinished, loadProgramme, nextEvent, nextSeminar, eventDisclosure, eventTimeline, programmeProgress, showSavedResponse, voteCounts, renderProgramme, participantRings, ringArc, calendarDay, renderPresentationNudge, onsiteDays} from './shared.js';
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
 const requestedEvent = new URLSearchParams(location.search).get('event');
 preserveInvitationLinks(token);
@@ -8,11 +7,6 @@ const expandedEvents = new Map();
 let timeline;
 const answerNames = {available:'Available', unavailable:'Unavailable', unknown:'Awaiting reply'};
 const roleNames = {professor:'Professor', student:'Student'};
-function element(tag, text, className) {
-  const node = document.createElement(tag); node.textContent = text;
-  if (className) node.className = className;
-  return node;
-}
 function answerFor(person, slot) {
   const answer = person.answers[slot.id || slot.slot_id];
   return ['available', 'unavailable'].includes(answer) ? answer : 'unknown';

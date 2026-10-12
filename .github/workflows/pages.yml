@@ -15,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -22,6 +24,8 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - name: Check publication files and scan for secrets
+        run: python3 scripts/check_publication.py --secrets
       - run: pip install -r requirements.txt
       - run: npm ci
       - name: Check sender and response handling
@@ -35,11 +39,10 @@ jobs:
           node --check site/agenda.js
           node --check site/shared.js
           node --test tests/programme.mjs
-      - name: Check Pages without a backend and with a separate API
+      - name: Check maintained browser suites
         run: |
           npx playwright install --with-deps chromium
-          npm run test:pages
-          npm run test:timeline
+          npm run test:browser
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: test
@@ -53,11 +56,15 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Configure the hosted API
         env:
           D3_API_URL: ${{ vars.D3_API_URL }}
           D3_SITE_URL: ${{ vars.D3_SITE_URL }}
         run: python3 scripts/configure_site.py
+      - name: Check the configured Pages artifact and scan for secrets
+        run: python3 scripts/check_publication.py --secrets
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:

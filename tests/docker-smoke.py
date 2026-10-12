@@ -78,7 +78,7 @@ try:
     secret = parse_qs(urlparse(cli('admin', '--print-url')).fragment)['key'][0]
     invitation = request('/api/invitation', dict(token=token))
     slot = invitation['poll']['slots'][0]['id']
-    data = dict(token=token, revision=invitation['revision'], **{'answer:' + slot:'available'})
+    data = dict(token=token, revision=invitation['revision'], response_version=invitation['response_version'], **{'answer:' + slot:'available'})
     request('/api/respond', urlencode(data).encode(), {'Content-Type':'application/x-www-form-urlencoded', 'Accept':'application/json'})
     with sqlite3.connect(f'file:{data_directory.name}/responses.sqlite3?mode=ro', uri=True) as connection:
         record = json.loads(connection.execute('SELECT data FROM invitations').fetchone()[0])

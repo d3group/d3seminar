@@ -1,12 +1,14 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import threading
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
 import seminar
@@ -55,7 +57,7 @@ class MailerTests(unittest.TestCase):
     def complete(self, token='A'*43):
         store = self.server.d3_app.store
         invite = store.invitation(token)
-        store.respond(dict(token=token, revision=invite['revision'], **{'answer:'+s['id']:'available' for s in invite['poll']['slots']}))
+        store.respond(dict(token=token, revision=invite['revision'], response_version=invite['response_version'], **{'answer:'+s['id']:'available' for s in invite['poll']['slots']}))
 
     def test_next_seminar_invites_everyone_and_reminds_only_unfinished_invitees(self):
         self.complete()
@@ -146,6 +148,29 @@ class MailerTests(unittest.TestCase):
         self.assertIn('DTSTAMP:20261001T123456Z', plan['messages'][0]['attachments'][0]['content'])
         row = plan['messages'][0]
         self.assertTrue(mailer.api(self.settings, 'claim_mail', event_id='seminar-1', kind='confirm', participant_id=row['id'], preview=row['preview'], message_id='<test@example.com>')['claimed'])
+
+    def test_clients_reject_redirects_without_contacting_the_destination(self):
+        visited = []
+
+        def redirect(environ, start_response):
+            visited.append(environ['PATH_INFO'])
+            start_response(f'{code} Redirect', [('Location', self.settings['api_url'] + 'destination')])
+            return []
+
+        self.server.application = redirect
+        with patch.object(seminar, 'PRIVATE', self.root), \
+             patch.dict(os.environ, {'D3_API_URL':self.settings['api_url'], 'D3_MAIL_API_URL':self.settings['api_url']}):
+            for code in (301, 302, 303, 307, 308):
+                for name, request in [('organizer', lambda:seminar.backend({}, 'responses')),
+                                      ('mailer', lambda:mailer.api(self.settings, 'preview_mail', kind='invite'))]:
+                    with self.subTest(client=name, status=code):
+                        with self.assertRaises((ValueError, HTTPError)) as caught:
+                            request()
+                        self.assertNotIn('/destination', visited)
+                        if isinstance(caught.exception, HTTPError):
+                            caught.exception.close()
+                        if code in (301, 302, 303):
+                            self.assertIn('redirect', str(caught.exception).lower())
 
 
 if __name__ == '__main__':
