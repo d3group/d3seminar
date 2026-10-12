@@ -6,7 +6,6 @@ from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.parse import urlparse
 from urllib.request import Request, build_opener
 
 import seminar
@@ -15,10 +14,7 @@ PRIVATE = Path(os.environ.get('D3_MAIL_DIR', seminar.ROOT / '.mailer'))
 
 
 def api(settings, action, **data):
-    base = os.environ.get('D3_MAIL_API_URL') or settings['api_url']
-    url = urlparse(base)
-    if (url.scheme != 'https' and not (url.scheme == 'http' and url.hostname in {'localhost', '127.0.0.1'})) or not url.hostname or url.username or url.password or url.query or url.fragment or not url.path.endswith('/'):
-        raise ValueError('Use an HTTPS backend URL, or HTTP on localhost, ending with /.')
+    base = seminar.validate_api_url(os.environ.get('D3_MAIL_API_URL') or settings['api_url'])
     request = Request(base + 'api/admin', data=json.dumps(dict(action=action, secret=settings['admin_secret'], **data)).encode(),
                       headers={'Content-Type':'application/json'})
     try:
@@ -95,7 +91,7 @@ def main():
     parser.add_argument('--event', default='next', help='Defaults to the next upcoming seminar; optionally choose an event id')
     parser.add_argument('--send', action='store_true', help='Send after the local password prompt; default is preview only')
     parser.add_argument('--from-settings', type=Path, default=seminar.ROOT/'data/settings.json', help='Existing private settings to import once')
-    parser.add_argument('--api-url', default='http://localhost:8080/', help='Backend address for setup; use HTTPS for a hosted backend')
+    parser.add_argument('--api-url', default='http://localhost:8080/', help='Backend root URL for setup; use HTTPS for a hosted backend')
     args = parser.parse_args()
     PRIVATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
@@ -105,7 +101,7 @@ def main():
                 raise ValueError('Local email settings already exist. Edit .mailer/settings.json to change them.')
             old = seminar.read_json(args.from_settings)
             settings = {key:old[key] for key in ('sender_name','sender_email','smtp_username','smtp_host','smtp_port','admin_secret')}
-            seminar.save_private(path, dict(settings, api_url=args.api_url))
+            seminar.save_private(path, dict(settings, api_url=seminar.validate_api_url(args.api_url)))
             print('Created private local email settings. No password copied or stored.')
             return
         with (PRIVATE/'command.lock').open('a') as lock:

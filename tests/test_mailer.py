@@ -172,6 +172,42 @@ class MailerTests(unittest.TestCase):
                         if code in (301, 302, 303):
                             self.assertIn('redirect', str(caught.exception).lower())
 
+    def test_setup_rejects_invalid_api_addresses_without_saving_settings(self):
+        addresses = ['http://outside.example/', 'https://api.example.org/nested/',
+                     'http://localhost:0/', 'https://api.example.org/#token=test']
+        for index, address in enumerate(addresses):
+            directory = self.root / f'bad-mail-{index}'
+            args = ['mailer.py', 'setup', '--from-settings', str(self.root / 'settings.json'), '--api-url', address]
+            with self.subTest(address=address), patch.object(mailer, 'PRIVATE', directory), \
+                 patch.object(sys, 'argv', args), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as stopped:
+                    mailer.main()
+                self.assertEqual(stopped.exception.code, 1)
+                self.assertFalse((directory / 'settings.json').exists())
+        for index, address in enumerate([self.settings['api_url'], 'https://api.example.org/']):
+            directory = self.root / f'valid-mail-{index}'
+            args = ['mailer.py', 'setup', '--from-settings', str(self.root / 'settings.json'), '--api-url', address]
+            with patch.object(mailer, 'PRIVATE', directory), patch.object(sys, 'argv', args), contextlib.redirect_stdout(io.StringIO()):
+                mailer.main()
+            self.assertEqual(seminar.read_json(directory / 'settings.json')['api_url'], address)
+
+    def test_api_validates_settings_and_environment_before_sending_credentials(self):
+        visited = []
+
+        def receive(environ, start_response):
+            visited.append(environ['PATH_INFO'])
+            start_response('200 OK', [('Content-Type', 'application/json')])
+            return [b'{"ok":true}']
+
+        self.server.application = receive
+        invalid = self.settings['api_url'] + 'nested/'
+        for override in (False, True):
+            settings = dict(self.settings, api_url=self.settings['api_url'] if override else invalid)
+            with self.subTest(override=override), patch.dict(os.environ, {'D3_MAIL_API_URL':invalid if override else ''}):
+                with self.assertRaises(ValueError):
+                    mailer.api(settings, 'preview_mail', kind='invite')
+        self.assertEqual(visited, [])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -390,10 +390,11 @@ class Handler:
                 if self.headers.get_content_type() != 'application/x-www-form-urlencoded':
                     raise ValueError('Use the seminar response form.')
                 params = {key: values[0] for key, values in parse_qs(data, keep_blank_values=True).items()}
-                record = self.event_store(params).respond(params)
+                store = self.event_store(params)
+                record = store.respond(params)
                 if wants_json:
                     if params.get('partial') == 'true':
-                        result = self.event_store(params).invitation(params['token'], include_votes=True)
+                        result = store.invitation(params['token'], include_votes=True)
                     else:
                         result = {key:record[key] for key in ('answers', 'comment', 'updated_at')}
                         result['response_version'] = response_version(record)

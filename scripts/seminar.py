@@ -280,7 +280,7 @@ def initialize(args):
     if (PRIVATE / 'settings.json').exists():
         raise ValueError('Already initialized; use configure to change settings.')
     address = email_address(args.email)
-    config = load_config()
+    load_config()
     save_private(PRIVATE / 'settings.json', {
         'sender_email': address, 'sender_name': args.name, 'smtp_username': args.smtp_user or '',
         'smtp_host': 'mailmaster.uni-wuerzburg.de', 'smtp_port': 465,

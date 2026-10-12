@@ -29,10 +29,9 @@ export function nextSeminar(entries, now = Date.now()) {
 }
 
 export function eventDisclosure(heading, content, open, onToggle) {
-  const details = document.createElement('details'); details.className = 'event-disclosure'; details.open = open;
-  const summary = document.createElement('summary'); summary.className = 'event-disclosure-summary';
-  const arrows = document.createElement('span'); arrows.className = 'event-disclosure-arrows';
-  arrows.textContent = '›››'; arrows.setAttribute('aria-hidden', 'true');
+  const details = element('details', '', 'event-disclosure'); details.open = open;
+  const summary = element('summary', '', 'event-disclosure-summary');
+  const arrows = element('span', '›››', 'event-disclosure-arrows'); arrows.setAttribute('aria-hidden', 'true');
   summary.append(heading, arrows);
   summary.addEventListener('click', () => onToggle(!details.open));
   details.append(summary, content);
@@ -40,18 +39,18 @@ export function eventDisclosure(heading, content, open, onToggle) {
 }
 
 export function eventTimeline(container, events, initialId) {
-  const wrapper = document.createElement('section'); wrapper.className = 'event-timeline';
+  const wrapper = element('section', '', 'event-timeline');
   wrapper.setAttribute('aria-label', 'Event timeline'); wrapper.setAttribute('aria-roledescription', 'carousel');
-  const arrows = document.createElement('div'); arrows.className = 'timeline-arrows';
+  const arrows = element('div', '', 'timeline-arrows');
   const arrow = (text, label, direction) => {
-    const button = document.createElement('button'); button.type = 'button'; button.textContent = text;
+    const button = element('button', text); button.type = 'button';
     button.setAttribute('aria-label', label); button.setAttribute('aria-controls', container.id);
     button.addEventListener('click', () => move(index + direction * count())); arrows.append(button);
     return button;
   };
   const previous = arrow('←', 'Earlier events', -1), next = arrow('→', 'Later events', 1);
-  const status = document.createElement('p'); status.className = 'sr-only'; status.setAttribute('aria-live', 'polite');
-  const stage = document.createElement('div'); stage.className = 'timeline-stage';
+  const status = element('p', '', 'sr-only'); status.setAttribute('aria-live', 'polite');
+  const stage = element('div', '', 'timeline-stage');
   wrapper.append(status, stage);
   container.before(wrapper); stage.append(arrows, container); container.classList.add('timeline-track');
   container.tabIndex = 0; container.setAttribute('aria-label', 'Events, from earlier to later');
@@ -264,13 +263,11 @@ export function ringArc(ring, index, part = 0, parts = 1) {
 
 export function renderProgramme(container, programme = {}, heading = 'h4') {
   container.replaceChildren();
-  const topic = document.createElement(heading); topic.textContent = programme.topic || 'Programme to follow';
-  container.append(topic);
+  container.append(element(heading, programme.topic || 'Programme to follow'));
   for (const [key, label] of [['presenters', 'Presenters'], ['room', 'Room'], ['agenda', 'Agenda']]) {
     if (!programme[key]) continue;
     const text = document.createElement('p');
-    const heading = document.createElement('strong'); heading.textContent = label + ': ';
-    text.append(heading, document.createTextNode(programme[key])); container.append(text);
+    text.append(element('strong', label + ': '), document.createTextNode(programme[key])); container.append(text);
   }
   container.hidden = false;
 }
@@ -308,15 +305,12 @@ export function renderPresentationNudge(container, entries, token) {
   container.hidden = !progress;
   if (!progress) return;
   const copy = document.createElement('div');
-  const title = document.createElement('h2'); title.textContent = 'Your presentations';
-  const text = document.createElement('p'); text.textContent = progress.text;
-  const steps = document.createElement('p'); steps.className = 'presentation-milestones';
+  const steps = element('p', '', 'presentation-milestones');
   const status = (added, pending) => !added ? 'to add' : pending ? 'added (details to follow)' : 'added';
   steps.textContent = `Seminar proposal: ${status(progress.seminar, progress.seminarDetailsPending)} · Onsite proposal: ${status(progress.onsite, progress.onsiteDetailsPending)}`;
-  copy.append(title, text, steps);
-  const link = document.createElement('a'); link.className = 'text-link';
+  copy.append(element('h2', 'Your presentations'), element('p', progress.text), steps);
+  const link = element('a', progress.seminar && progress.onsite ? 'Update your presentations' : 'Propose a talk', 'text-link');
   link.href = 'agenda.html' + (progress.next ? '?' + new URLSearchParams({present:progress.next}) : '') + '#' + new URLSearchParams({token});
-  link.textContent = progress.seminar && progress.onsite ? 'Update your presentations' : 'Propose a talk';
   container.replaceChildren(copy, link);
 }
 
@@ -334,13 +328,12 @@ export function showSavedResponse(entries, token) {
   url.searchParams.delete('saved'); history.replaceState(null, '', url);
   const entry = entries.find(entry => entry.event.id === savedId);
   if (!entry?.invitation?.updated_at) return;
-  const banner = document.getElementById('saved-response');
+  const banner = $('saved-response');
   const text = document.createElement('p');
   const count = answeredCount(entry.invitation), total = entry.invitation.poll.slots.length;
   text.textContent = `Response saved for ${entry.event.name}. ${count} of ${total} options answered.`
     + (count < total && !entry.invitation.state.final_event ? ' You can finish it later.' : '');
-  const link = document.createElement('a');
-  link.href = eventHref(savedId, token); link.textContent = 'Review saved response';
+  const link = element('a', 'Review saved response'); link.href = eventHref(savedId, token);
   banner.replaceChildren(text, link); banner.hidden = false;
 }
 
