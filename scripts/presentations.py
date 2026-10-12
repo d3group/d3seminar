@@ -1,4 +1,5 @@
 import io
+import json
 from pathlib import Path
 import secrets
 from urllib.parse import urlparse
@@ -10,7 +11,7 @@ import seminar
 from models import Invitation, Presentation, PresentationFile
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
-PRESENTER_ROLES = {'student', 'professor'}
+PRESENTER_ROLES = {'student', 'professor', 'member'}
 MATERIAL_POLICY = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
 
 
@@ -28,8 +29,13 @@ def own(session, participant_id):
     return result
 
 
+def ordered_people(people, state):
+    order = {key:index for index, key in enumerate(state.get('programme_order', []))}
+    return sorted(people, key=lambda person: (order.get(person['id'], len(order)), person['name'].casefold(), person['id']))
+
+
 def listing(store, session, viewer_id=None):
-    people = sorted(store.records(session), key=lambda person: (person['name'].casefold(), person['id']))
+    people = ordered_people(store.records(session), store.state(session))
     result = []
     for person in people:
         if not person['active'] or person.get('role') not in PRESENTER_ROLES:
@@ -38,11 +44,64 @@ def listing(store, session, viewer_id=None):
         if talk and (viewer_id is not None or talk['visibility'] == 'public'):
             row = dict(name=person['name'])
             if viewer_id is not None:
+                row['participant_id'] = person['id']
                 row['email'] = person['email']
                 row.update({key:talk[key] for key in ('title', 'abstract', 'visibility', 'status', 'presentation_minutes', 'questions_minutes', 'explainer_url', 'slides_url', 'files')})
                 row['mine'] = person['id'] == viewer_id
             result.append(row)
     return result
+
+
+def order_version(talks):
+    return seminar.event_revision([talk['participant_id'] for talk in talks])
+
+
+def reorder(store, ordered_ids, version):
+    with store.session(write=True) as session:
+        talks = listing(store, session, viewer_id='')
+        current = [talk['participant_id'] for talk in talks]
+        if version != order_version(talks):
+            raise ValueError('The running order changed. Reload the agenda before moving a talk.')
+        if (not isinstance(ordered_ids, list) or any(not isinstance(key, str) for key in ordered_ids)
+                or len(ordered_ids) != len(current) or set(ordered_ids) != set(current)):
+            raise ValueError('Include each current presenter exactly once in the running order.')
+        store.write_state(session, dict(store.state(session), programme_order=ordered_ids))
+
+
+def move(store, destination, participant_id, version):
+    if store.database == destination.database:
+        raise ValueError('Choose a different event.')
+    # One SQLite transaction covers both event databases, including uploaded files.
+    with store.session(write=True) as session:
+        connection = session.connection()
+        connection.exec_driver_sql('ATTACH DATABASE ? AS destination', (str(destination.database.resolve()),))
+        talks = listing(store, session, viewer_id='')
+        if version != order_version(talks):
+            raise ValueError('The running order changed. Reload the agenda before moving a talk.')
+        if participant_id not in [talk['participant_id'] for talk in talks]:
+            raise ValueError('Choose a current presenter.')
+        person = next(person for person in store.records(session) if person['id'] == participant_id)
+        target = connection.exec_driver_sql('SELECT data FROM destination.invitations WHERE id=?', (participant_id,)).scalar()
+        target = json.loads(target) if target else None
+        if (not target or not target.get('active') or target.get('role') not in PRESENTER_ROLES
+                or target['token_hash'] != person['token_hash'] or target['email'] != person['email']):
+            raise ValueError('The author needs a matching active invitation to the destination event.')
+        if connection.exec_driver_sql('SELECT 1 FROM destination.presentations WHERE participant_id=?', (participant_id,)).scalar():
+            raise ValueError('This author already has a talk in that event. Ask them to resolve it before moving this talk.')
+        target_state = connection.exec_driver_sql('SELECT data FROM destination.poll_state WHERE id=1').scalar()
+        target_state = json.loads(target_state) if target_state else {}
+        target_people = [json.loads(raw) for raw, in connection.exec_driver_sql('SELECT data FROM destination.invitations')]
+        target_talks = set(connection.exec_driver_sql('SELECT participant_id FROM destination.presentations').scalars())
+        target_state['programme_order'] = [person['id'] for person in ordered_people(target_people, target_state)
+                                           if person['active'] and person['id'] in target_talks] + [participant_id]
+        connection.exec_driver_sql('INSERT INTO destination.presentations (participant_id, data) SELECT participant_id, data FROM main.presentations WHERE participant_id=?', (participant_id,))
+        connection.exec_driver_sql('INSERT INTO destination.presentation_files (id, participant_id, kind, name, mime, content) SELECT id, participant_id, kind, name, mime, content FROM main.presentation_files WHERE participant_id=?', (participant_id,))
+        connection.exec_driver_sql('DELETE FROM main.presentation_files WHERE participant_id=?', (participant_id,))
+        connection.exec_driver_sql('DELETE FROM main.presentations WHERE participant_id=?', (participant_id,))
+        connection.exec_driver_sql('INSERT INTO destination.poll_state (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', (json.dumps(target_state),))
+        state = store.state(session)
+        state['programme_order'] = [talk['participant_id'] for talk in talks if talk['participant_id'] != participant_id]
+        store.write_state(session, state)
 
 
 def editable(store, session, token, version):

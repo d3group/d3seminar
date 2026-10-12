@@ -9,13 +9,21 @@
 <body>
   <header class="masthead">
     <a class="university-brand" href="https://www.uni-wuerzburg.de/" aria-label="University of Würzburg"><img class="university-logo" src="assets/uni-wuerzburg.svg" width="347" height="152" alt="Julius-Maximilians-Universität Würzburg"></a>
-    <a class="brand" href="./" aria-label="D3 programme home"><img class="d3-logo" src="assets/d3.svg" width="241" height="48" alt="D3 · Data Driven Decisions"></a>
+    <a class="brand" href="./" aria-label="D3 programme home" data-invitation-link><img class="d3-logo" src="assets/d3.svg" width="241" height="48" alt="D3 · Data Driven Decisions"></a>
   </header>
   <main class="admin-main">
     <p class="eyebrow" id="admin-semester">Winter semester 2026/27</p><h1 id="admin-event-title">Organizer dashboard</h1>
-    <nav class="event-tabs" id="event-tabs" aria-label="Choose an event"></nav>
+    <p><a id="back-to-agenda" hidden>Back to agenda</a></p>
     <p class="notice" id="admin-notice" role="status" aria-live="polite">Loading your dashboard…</p>
-    <section id="dashboard" hidden>
+    <div id="admin-panels" hidden>
+    <nav class="admin-sections" aria-label="Administration">
+      <button type="button" data-panel="events" aria-pressed="true">Events</button>
+      <button type="button" data-panel="users" aria-pressed="false">Users</button>
+      <button type="button" data-panel="email" aria-pressed="false">Email</button>
+    </nav>
+    <section id="panel-events">
+    <nav class="event-tabs" id="event-tabs" aria-label="Choose an event"></nav>
+    <section id="dashboard">
       <div class="dashboard-summary"><div><h2 id="response-count"></h2><p id="roster-count"></p><p id="admin-deadline"></p></div><button class="secondary refresh" id="refresh">Refresh responses</button></div>
       <p class="notice" id="outcome"></p>
       <h2>Candidate times</h2><p class="admin-help" id="admin-timezone"></p>
@@ -46,20 +54,46 @@
           <button class="secondary" type="submit">Save programme</button>
         </form>
       </details>
-      <h2 class="section-title">Participants</h2><p class="admin-help">Names, roles and availability are shared with invited participants. Emails and notes are only visible to organizers. Awaiting reply means unanswered, including any people still missing from the required roster.</p>
+      <h2 class="section-title">Participants</h2><p class="admin-help">Names, roles and availability are shared with invited participants. Presenter emails appear in the private agenda; response notes are visible only to organizers. Awaiting reply means unanswered, including any people still missing from the required roster.</p>
       <div class="table-scroll"><table><caption class="sr-only">Private participant responses</caption><thead id="people-head"></thead><tbody id="people-rows"></tbody></table></div>
-      <section class="mail-controls"><h2>Email previews</h2>
-        <p class="admin-help">Invitations, reminders and presentation nudges use the next seminar. Final confirmations use the selected event. Sending runs locally on your computer, where you enter your university password.</p>
+    </section>
+    </section>
+    <section id="panel-users" hidden aria-labelledby="users-heading">
+      <div class="dashboard-summary"><div><h2 id="users-heading">Users & organizer access</h2><p class="admin-help">Add people to the roster, choose their events and appoint organizers. Saving never sends an email.</p></div><button type="button" class="secondary" id="add-user">Add user</button></div>
+      <p id="users-notice" class="notice" role="status" hidden></p>
+      <form id="user-form" class="admin-review user-form" hidden>
+        <h3 id="user-form-heading">Add user</h3>
+        <label for="user-name">Full name</label><input id="user-name" required maxlength="120" autocomplete="off">
+        <label for="user-email">Email</label><input id="user-email" type="email" autocomplete="off"><small>An email is required when joining an event.</small>
+        <label for="user-role">Academic role</label><select id="user-role"><option>PhD</option><option>Professor</option><option>Postdoc</option><option>Research assistant</option><option>Associated member</option><option>Unconfirmed</option></select>
+        <fieldset id="user-events"><legend>Events</legend><p class="admin-help">Leave all unchecked to keep this person as a draft.</p></fieldset>
+        <label class="consent"><input id="user-organizer" type="checkbox">Organizer access</label>
+        <p class="admin-help">Organizers manage users, event dates, running orders and the email queue. Talk details stay with their authors. Keep at least one organizer.</p>
+        <div class="save-actions"><button class="primary" type="submit">Save user</button><button class="text-button" id="cancel-user" type="button">Cancel</button><button class="text-button danger" id="remove-user" type="button">Remove user</button></div>
+      </form>
+      <div class="save-actions"><p id="users-count"></p><label class="consent"><input id="show-removed" type="checkbox">Show removed users</label><button id="refresh-users" type="button" class="text-button">Refresh users</button></div>
+      <div class="table-scroll"><table class="users-table"><caption class="sr-only">Private user roster</caption><thead><tr><th scope="col">Person</th><th scope="col">Academic role</th><th scope="col">Access</th><th scope="col">Events</th><th scope="col">Actions</th></tr></thead><tbody id="user-rows"></tbody></table></div>
+    </section>
+    <section id="panel-email" hidden aria-labelledby="email-heading">
+      <section class="mail-controls"><h2 id="email-heading">Email</h2>
+        <p class="admin-help">Review recipients and queue personalized emails here. Run the local sender when you are ready to enter your university password.</p>
         <form id="mail-preview-form" class="save-actions">
           <label for="mail-kind">Email type</label>
-          <select id="mail-kind"><option value="invite">1 · Confirm next seminar timings</option><option value="remind">2 · Remind unfinished respondents</option><option value="present">3 · Student presentation nudge</option><option value="confirm">Final confirmations and calendar</option></select>
+          <select id="mail-kind"><option value="invite">1 · Confirm next seminar timings</option><option value="remind">2 · Remind unfinished respondents</option><option value="present">3 · PhD talk proposal nudge</option><option value="confirm">Final confirmations and calendar</option></select>
+          <label for="mail-event">Event</label><select id="mail-event"><option value="next">Next seminar</option></select>
           <button class="secondary" type="submit">Preview recipients and emails</button>
         </form>
         <p id="mail-notice" class="notice" role="status" hidden></p>
         <section id="mail-review" class="admin-review" aria-label="Email previews" hidden>
           <p id="mail-count"></p><div id="mail-messages"></div>
-
+          <button type="button" class="primary" id="queue-mail">Queue these emails</button>
         </section>
+      </section>
+      <section class="email-batches" aria-labelledby="queue-heading">
+        <div class="dashboard-summary"><h2 id="queue-heading">Delivery queue</h2><button type="button" class="text-button" id="refresh-mail">Refresh queue</button></div>
+        <p>Run <code>python3 scripts/mailer.py queued --send</code> on your computer. It sends eligible queued messages and records delivery.</p>
+        <p class="admin-help">Ready messages wait for the local sender. Attempted messages need a delivery check before any retry. Cancel stops messages that have not been claimed for sending.</p>
+        <div id="mail-batches"></div>
       </section>
       <details class="mail-steps"><summary>Terminal commands</summary><p>These commands prepare email previews. Add <code>--send</code> to deliver after entering your JMU password.</p>
         <dl><dt>Invite the group</dt><dd><code>python3 scripts/mailer.py invite</code></dd>
@@ -69,6 +103,7 @@
         <p>Repeated commands skip messages already sent or attempted. Test mode allows delivery only to your test address.</p>
       </details>
     </section>
+    </div>
   </main>
   <footer>
     <span>© D3 Group Würzburg</span>

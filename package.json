@@ -9,7 +9,8 @@
     "test:timeline": "node tests/timeline-browser.mjs",
     "test:onsite": "node tests/onsite-browser.mjs",
     "test:presentations": "node tests/presentations-browser.mjs",
-    "test:browser": "npm run test:pages && npm run test:timeline && npm run test:onsite && npm run test:presentations"
+    "test:admin": "node tests/admin-browser.mjs",
+    "test:browser": "npm run test:pages && npm run test:timeline && npm run test:onsite && npm run test:presentations && npm run test:admin"
   },
   "devDependencies": {
     "playwright": "1.59.1"

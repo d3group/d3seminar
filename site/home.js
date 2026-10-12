@@ -371,6 +371,12 @@ function renderCard(entry, invitation, onSave, openDate = null, saved = false) {
     entry.link.href = eventHref(entry.event.id); return;
   }
   renderAgendaPreview(entry.agenda, entry.event, invitation.presentations || [], true);
+  entry.node.querySelector('[data-organizer-link]')?.remove();
+  if (invitation.is_organizer) {
+    const manage = element('a', 'Organize event', 'text-link'); manage.dataset.organizerLink = '';
+    manage.href = 'admin.html?' + new URLSearchParams({event:entry.event.id}) + '#' + new URLSearchParams({token});
+    entry.node.querySelector('.event-card-bottom').append(manage);
+  }
   const finalEvent = invitation.state.final_event;
   if (invitation.state.final_event) {
     entry.summary.replaceChildren(element('p', slotLabel(finalEvent, invitation.poll.timezone, invitation.poll.daily_hours)));

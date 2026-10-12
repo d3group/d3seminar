@@ -194,8 +194,9 @@ try {
       await page.getByRole('button', {name:'Finalize this time', exact:true}).click();
       await page.locator('#admin-notice').filter({hasText:'Time finalized.'}).waitFor();
     }
+    await page.getByRole('button', {name:'Email', exact:true}).click();
     await page.locator('#mail-kind').selectOption('confirm');
-    const previewResponse = page.waitForResponse(response => response.url().endsWith('/api/admin') && response.request().postDataJSON().action === 'preview_mail');
+    const previewResponse = page.waitForResponse(response => response.url().endsWith('/api/admin') && response.request().postDataJSON().action === 'email_preview');
     await page.getByRole('button', {name:'Preview recipients and emails', exact:true}).click();
     const result = await (await previewResponse).json();
     assert.equal(result.ok, true, result.error);
@@ -210,6 +211,7 @@ try {
     for (const command of commands.filter(command => !command.includes(' confirm'))) {
       assert.equal(command.includes('--event'), false);
     }
+    await page.getByRole('button', {name:'Events', exact:true}).click();
   }
   const agendaApi = async (action, data) => {
     const response = await page.request.post(details.api + 'api/' + action, {data:{event_id:'seminar-2', ...data}});

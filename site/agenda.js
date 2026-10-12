@@ -7,7 +7,7 @@ let config, entries = [], editingId, saving = false;
 const drafts = new Map();
 const expandedEvents = new Map();
 const requestedEvent = new URLSearchParams(location.search).get('event');
-const canPresent = invitation => ['student', 'professor'].includes(invitation?.role);
+const canPresent = invitation => ['student', 'professor', 'member'].includes(invitation?.role);
 
 function timingLabel(talk) {
   const parts = [];
@@ -92,7 +92,7 @@ function timeCell(event, slot) {
   return cell;
 }
 
-function talkTable(event, talks, finalEvent) {
+function talkTable(event, talks, finalEvent, organizer) {
   const table = element('table', '', 'talk-table');
   const caption = element('caption', 'Draft running order', 'agenda-order-note');
   caption.setAttribute('aria-label', 'Draft running order · ' + event.name); table.append(caption);
@@ -119,10 +119,36 @@ function talkTable(event, talks, finalEvent) {
       continue;
     }
     const name = element('th', ''); name.scope = 'row'; name.dataset.label = 'Presenter';
+    row.dataset.presenter = talk.participant_id;
     name.append(element('span', talk.name));
     if (talk.email) {
       const email = element('a', talk.email, 'talk-presenter-email'); email.href = 'mailto:' + encodeURIComponent(talk.email);
       name.append(email);
+    }
+    if (organizer) {
+      const controls = element('div', '', 'talk-order-controls');
+      const position = talks.indexOf(talk);
+      for (const [direction, label, symbol] of [[-1, 'earlier', '↑'], [1, 'later', '↓']]) {
+        const button = element('button', symbol, 'secondary'); button.type = 'button';
+        button.dataset.reorder = talk.participant_id;
+        button.setAttribute('aria-label', `Move ${talk.name} ${label} in ${event.name}`);
+        button.disabled = saving || position + direction < 0 || position + direction >= talks.length;
+        button.addEventListener('click', () => moveTalk(event.id, talk.participant_id, direction));
+        controls.append(button);
+      }
+      const destination = element('select', '');
+      destination.setAttribute('aria-label', `Destination event for ${talk.name}`);
+      const prompt = element('option', 'Move to…'); prompt.value = ''; destination.append(prompt);
+      for (const entry of entries.filter(entry => entry.event.id !== event.id && entry.invitation?.is_organizer)) {
+        const option = element('option', entry.event.name); option.value = entry.event.id; destination.append(option);
+      }
+      const move = element('button', 'Move', 'secondary'); move.type = 'button'; move.disabled = true;
+      move.dataset.reorder = talk.participant_id;
+      move.setAttribute('aria-label', `Move ${talk.name} to selected event`);
+      destination.addEventListener('change', () => { move.disabled = saving || !destination.value; });
+      move.addEventListener('click', () => moveToEvent(event.id, talk.participant_id, destination.value));
+      controls.append(destination, move);
+      name.append(controls);
     }
     const details = element('td', '', 'talk-description'); details.dataset.label = 'Talk & abstract';
     details.append(element('strong', talk.title));
@@ -137,6 +163,58 @@ function talkTable(event, talks, finalEvent) {
   }
   table.append(body);
   return table;
+}
+
+async function moveTalk(eventId, participantId, direction) {
+  if (saving) return;
+  const entry = entries.find(entry => entry.event.id === eventId);
+  const order = entry.invitation.presentations.map(talk => talk.participant_id);
+  const from = order.indexOf(participantId), to = from + direction;
+  if (from < 0 || to < 0 || to >= order.length) return;
+  [order[from], order[to]] = [order[to], order[from]];
+  saving = true;
+  document.querySelectorAll('[data-reorder], [data-present]').forEach(button => button.disabled = true);
+  const notice = $('agenda-notice'); notice.hidden = false; notice.classList.remove('error');
+  notice.textContent = 'Saving running order…';
+  try {
+    const saved = await result(await apiFetch('admin', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:'reorder_presentations', token, event_id:eventId, ordered_ids:order, version:entry.invitation.presentation_order_version})}));
+    entry.invitation.presentations = saved.presentations;
+    entry.invitation.presentation_order_version = saved.presentation_order_version;
+    notice.textContent = 'Running order saved.';
+  } catch (error) { notice.textContent = error.message; notice.classList.add('error'); }
+  finally { saving = false; renderAgendas(); }
+  document.querySelector(`[data-event="${eventId}"] [data-presenter="${participantId}"] button:not(:disabled)`)?.focus();
+}
+
+async function moveToEvent(eventId, participantId, destinationId) {
+  if (saving || !destinationId) return;
+  const entry = entries.find(entry => entry.event.id === eventId);
+  const destination = entries.find(entry => entry.event.id === destinationId);
+  rememberDraft();
+  const ownTalk = entry.invitation.presentations.find(talk => talk.participant_id === participantId)?.mine;
+  if (ownTalk && drafts.has(eventId)) {
+    const notice = $('agenda-notice'); notice.hidden = false; notice.classList.add('error');
+    notice.textContent = 'Save your draft before moving this talk to another event.';
+    return;
+  }
+  saving = true;
+  document.querySelectorAll('[data-reorder], [data-present]').forEach(button => button.disabled = true);
+  const notice = $('agenda-notice'); notice.hidden = false; notice.classList.remove('error');
+  notice.textContent = 'Moving talk…';
+  try {
+    const saved = await result(await apiFetch('admin', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:'move_presentation', token, event_id:eventId, destination_event_id:destinationId,
+        participant_id:participantId, version:entry.invitation.presentation_order_version})}));
+    entry.invitation = saved.source;
+    destination.invitation = saved.destination;
+    editingId = null;
+    expandedEvents.set(destinationId, true);
+    $('presentation-editor').hidden = true;
+    const url = new URL(location.href); url.searchParams.delete('present'); history.replaceState(null, '', url);
+    notice.textContent = `Talk moved to ${destination.event.name}.`;
+  } catch (error) { notice.textContent = error.message; notice.classList.add('error'); }
+  finally { saving = false; renderAgendas(); }
 }
 
 function presenterList(talks) {
@@ -169,6 +247,11 @@ function renderEvent(event, invitation, error, publicTalks = [], open = false, p
     edit.addEventListener('click', () => openEditor(event.id)); actions.append(edit);
   }
   header.append(actions);
+  if (invitation?.is_organizer) {
+    const manage = element('a', 'Organize event', 'text-link');
+    manage.href = 'admin.html?' + new URLSearchParams({event:event.id}) + '#' + new URLSearchParams({token});
+    actions.append(manage);
+  }
   const content = element('div', '', 'event-content'); content.append(header);
   const details = element('section', '', 'agenda-details');
   const pending = config.service_status !== 'ready';
@@ -177,7 +260,7 @@ function renderEvent(event, invitation, error, publicTalks = [], open = false, p
   else if (finalEvent && invitation) renderProgramme(details, invitation.state.programme, 'h3');
   if (details.childElementCount) content.append(details);
   const talks = invitation?.presentations || publicTalks;
-  if (!error && !pending) content.append(invitation ? talkTable(event, talks, finalEvent)
+  if (!error && !pending) content.append(invitation ? talkTable(event, talks, finalEvent, invitation.is_organizer)
     : talks.length ? presenterList(talks) : element('p', 'No public talks yet.', 'agenda-empty'));
   row.append(eventDisclosure(heading, content, open, expanded => expandedEvents.set(event.id, expanded)));
   $('agenda-list').append(row);
@@ -278,6 +361,8 @@ function updatePresentation(entry, saved) {
   expandedEvents.set(entry.event.id, true);
   entry.invitation.presentation = saved.presentation;
   entry.invitation.presentations = saved.presentations;
+  entry.invitation.presentation_order_version = saved.presentation_order_version;
+  entry.invitation.is_organizer = saved.is_organizer;
   currentFiles(); renderAgendas();
 }
 
@@ -288,6 +373,7 @@ async function result(response) {
 }
 
 async function savePresentation(remove = false) {
+  if (saving) return;
   const entry = selectedEntry();
   const proposal = {title:$('talk-title').value, abstract:$('talk-abstract').value, status:$('talk-placeholder').checked ? 'placeholder' : 'talk', visibility:visibility(), ...readTiming(),
     explainer_url:$('explainer-url').value, slides_url:$('slides-url').value};

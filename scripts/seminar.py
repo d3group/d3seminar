@@ -28,7 +28,7 @@ GROUP_SIZES = {'professor':5, 'student':15}
 
 
 def validate_roles(records):
-    if any(record.get('role', '') not in {'', *GROUP_SIZES} for record in records):
+    if any(record.get('role', '') not in {'', 'member', *GROUP_SIZES} for record in records):
         raise ValueError('Set each participant role to professor or student, or leave it blank until assigned.')
     for role, count in GROUP_SIZES.items():
         if sum(record.get('role') == role for record in records) > count:
@@ -385,27 +385,14 @@ def synchronize(args):
     print(f'Synchronized {result["count"]} invitation(s) to local SQLite. Existing responses to unchanged invitations are preserved.')
 
 
-def get_responses(config, invitations):
-    responses = backend(config, 'responses')['records']
-    by_id = {record['id']: record for record in responses}
-    if set(by_id) != {invite['id'] for invite in invitations}:
-        raise ValueError('Local invitations and response storage differ. Run sync first.')
-    for invite in invitations:
-        response = by_id.get(invite['id'])
-        if not response or response['revision'] != invite['revision'] or response['token_hash'] != digest(invite['token']):
-            raise ValueError('Local invitations and response storage differ. Run sync first.')
-    save_private(event_private(config) / 'responses.json', {'fetched_at': now(), 'records': responses})
-    return by_id
-
-
 def status(args):
     config = load_config()
-    invitations = load_invitations(config)
-    responses = get_responses(config, invitations)
-    for invite in invitations:
-        response = responses[invite['id']]
+    dashboard = backend(config, 'dashboard')
+    responses = dashboard['participants']
+    save_private(event_private(config) / 'responses.json', {'fetched_at':now(), 'records':responses})
+    for response in responses:
         count = len(response['answers'])
-        print(f'{invite["name"]}: {count}/{len(config["slots"])} options answered')
+        print(f'{response["name"]}: {count}/{len(dashboard["poll"]["slots"])} options answered')
         if response['comment']:
             print('  ' + response['comment'].replace('\n', '\n  '))
     print('A private snapshot is saved in ' + str(event_private(config) / 'responses.json') + '.')

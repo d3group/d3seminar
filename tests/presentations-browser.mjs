@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 
 const {chromium} = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = fileURLToPath(new URL('../', import.meta.url));
-const fixture = spawn('python3', ['tests/browser_fixture.py', '--presentations'], {cwd:root, stdio:['ignore','pipe','inherit']});
+const fixture = spawn('python3', ['tests/browser_fixture.py', '--presentations', '--organizer'], {cwd:root, stdio:['ignore','pipe','inherit']});
 let browser;
 try {
   const details = await new Promise((resolve, reject) => {
@@ -22,6 +22,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(details.home);
   await page.getByRole('link', {name:'Propose a talk', exact:true}).waitFor();
+  await page.locator('[data-event="seminar-1"]').getByRole('link', {name:'Organize event', exact:true}).waitFor();
   assert.equal(await page.locator('.event-card .event-disclosure').count(), 4);
   assert.equal(await page.locator('[data-event="seminar-1"] .event-disclosure').evaluate(node => node.open), true);
   for (const id of ['seminar-2', 'seminar-3', 'onsite']) {
@@ -69,6 +70,20 @@ try {
   const firstTable = page.locator('[data-event="seminar-1"] .talk-table');
   await firstTable.getByText('Decision-focused learning', {exact:true}).waitFor();
   await firstTable.getByText('Browser Test', {exact:true}).waitFor();
+  const organizer = await browser.newPage();
+  await organizer.goto(await page.locator('[data-event="seminar-1"]').getByRole('link', {name:'Organize event', exact:true}).getAttribute('href').then(href => new URL(href, details.base).href));
+  await organizer.locator('#dashboard').waitFor();
+  assert.equal(await organizer.locator('.mail-controls').isVisible(), false);
+  await organizer.reload();
+  await organizer.locator('#dashboard').waitFor();
+  await organizer.getByRole('navigation', {name:'Choose an event'}).getByRole('link', {name:'Seminar 2', exact:true}).click();
+  await organizer.getByRole('heading', {name:'Seminar 2', exact:true}).waitFor();
+  await organizer.getByRole('link', {name:'Back to agenda', exact:true}).click();
+  await organizer.locator('[data-event="seminar-2"]').getByRole('link', {name:'Organize event', exact:true}).waitFor();
+  await organizer.goto(details.base + 'admin.html#token=' + 'P'.repeat(43));
+  await organizer.locator('#admin-notice.error').waitFor();
+  assert.equal(await organizer.locator('#dashboard').isVisible(), false);
+  await organizer.close();
   assert.equal(await firstTable.getByRole('link', {name:'browser-test@example.com', exact:true}).getAttribute('href'), 'mailto:browser-test%40example.com');
   assert.deepEqual(await firstTable.getByRole('columnheader').allTextContents(), ['Presenter', 'Time slot', 'Talk & abstract', 'Explainer', 'Slides']);
   assert.equal(await firstTable.locator('.talk-row .talk-timeslot strong').textContent(), '14:00–14:35');
@@ -165,6 +180,8 @@ try {
   assert.equal(await professor.locator('#presentation-nudge').isVisible(), false);
   await professor.getByRole('navigation', {name:'Main navigation'}).getByRole('link', {name:'Agenda', exact:true}).click();
   await professor.locator('.talk-table').getByText('Decision-focused learning', {exact:true}).waitFor();
+  assert.equal(await professor.locator('[data-reorder]').count(), 0);
+  assert.equal(await professor.getByRole('link', {name:'Organize event', exact:true}).count(), 0);
   assert.equal(await professor.locator('#presentation-editor').isVisible(), false);
   assert.equal(await professor.locator('#presentation-nudge').isVisible(), false);
   await professor.locator('[data-event="seminar-1"]').getByRole('button', {name:'Add a talk', exact:true}).click();
@@ -181,6 +198,26 @@ try {
   await firstTable.getByText('Research perspectives', {exact:true}).waitFor();
   await firstTable.getByText('Professor Test', {exact:true}).waitFor();
   await firstTable.getByRole('link', {name:'professor@example.com', exact:true}).waitFor();
+  await page.getByRole('button', {name:'Back to agenda', exact:true}).click();
+  await firstTable.getByRole('button', {name:'Move Professor Test earlier in Seminar 1', exact:true}).click();
+  await page.locator('#agenda-notice').filter({hasText:'Running order saved.'}).waitFor();
+  assert.deepEqual(await firstTable.locator('.talk-row th > span').allTextContents(), ['Professor Test', 'Browser Test']);
+  await page.reload();
+  await firstTable.getByText('Research perspectives', {exact:true}).waitFor();
+  assert.deepEqual(await firstTable.locator('.talk-row th > span').allTextContents(), ['Professor Test', 'Browser Test']);
+  await firstTable.getByLabel('Destination event for Professor Test', {exact:true}).selectOption('seminar-2');
+  await firstTable.getByRole('button', {name:'Move Professor Test to selected event', exact:true}).click();
+  await page.locator('#agenda-notice').filter({hasText:'Talk moved to Seminar 2.'}).waitFor();
+  assert.equal(await firstTable.getByText('Research perspectives', {exact:true}).count(), 0);
+  const secondTable = page.locator('[data-event="seminar-2"] .talk-table');
+  await secondTable.getByText('Research perspectives', {exact:true}).waitFor();
+  await professor.goto(details.base + 'agenda.html?present=seminar-2#token=' + 'P'.repeat(43));
+  await professor.getByLabel('Talk title', {exact:true}).waitFor();
+  assert.equal(await professor.getByLabel('Talk title', {exact:true}).inputValue(), 'Research perspectives');
+  await secondTable.getByLabel('Destination event for Professor Test', {exact:true}).selectOption('seminar-1');
+  await secondTable.getByRole('button', {name:'Move Professor Test to selected event', exact:true}).click();
+  await page.locator('#agenda-notice').filter({hasText:'Talk moved to Seminar 1.'}).waitFor();
+  await page.locator('[data-event="seminar-1"]').getByRole('button', {name:'Edit your talk', exact:true}).click();
   assert.equal(await firstTable.locator('.agenda-open-slot').count(), 0);
   assert.equal(await page.getByLabel('Talk title', {exact:true}).inputValue(), 'Decision-focused learning');
   await professor.goto(details.base + 'agenda.html');

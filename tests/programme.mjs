@@ -160,7 +160,7 @@ test('date summaries treat legacy conditional replies and missing responses as a
   assert.deepEqual(voteCounts(people, {slot_id:'a'}, 2), {available:1, unavailable:1, unknown:2});
 });
 
-test('professors and students have separate fixed-capacity rings without guessing unassigned roles', () => {
+test('participant rings retain their minimum size and accommodate added members', () => {
   const people = [{name:'Student', role:'student'}, {name:'Professor', role:'professor'}, {name:'Unassigned'}];
   const [inner, outer] = participantRings(people);
   assert.equal(inner.capacity, 5);
@@ -168,6 +168,9 @@ test('professors and students have separate fixed-capacity rings without guessin
   assert.deepEqual(inner.people.map(p => p.name), ['Professor']);
   assert.deepEqual(outer.people.map(p => p.name), ['Student']);
   assert.ok(inner.radius[1] < outer.radius[0]);
+  const expanded = participantRings([...Array.from({length:16}, () => ({role:'student'})), {role:'member'}]);
+  assert.equal(expanded[1].people.length, 17);
+  assert.equal(expanded[1].capacity, 17);
 });
 
 test('five broad professor arcs and fifteen student arcs fill their rings with gaps; shared options divide each band', () => {

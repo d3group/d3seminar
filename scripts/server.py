@@ -20,6 +20,8 @@ from models import Invitation, PollState, history
 
 import seminar
 import presentations
+import users
+import email_queue
 from organizer import Organizer, write_config
 
 ANSWERS = {'available', 'unavailable'}
@@ -127,6 +129,7 @@ class Store:
             result['presentation'] = presentations.own(session, record['id']) if result['role'] in presentations.PRESENTER_ROLES else {}
             if include_presentations:
                 result['presentations'] = presentations.listing(self, session, record['id'])
+                result['presentation_order_version'] = presentations.order_version(result['presentations'])
             if include_votes:
                 people = sorted(self.records(session), key=lambda person: (person['name'].casefold(), person['id']))
                 result['participants'] = [dict(name=person['name'], role=person.get('role', ''), answers=person['answers']) for person in people
@@ -327,9 +330,14 @@ def create_app(service):
             raise ValueError('Unknown event.')
         return service.stores[event_id]
 
+    def invitation_result(store, token, **options):
+        result = store.invitation(token, **options)
+        result['is_organizer'] = users.organizer_access(service.store, token)
+        return result
+
     def presentation_result(store, token):
-        current = store.invitation(token, include_presentations=True)
-        return dict(ok=True, presentation=current['presentation'], presentations=current['presentations'])
+        current = invitation_result(store, token, include_presentations=True)
+        return dict(ok=True, **{key:current[key] for key in ('presentation', 'presentations', 'presentation_order_version', 'is_organizer')})
 
     @app.get('/health')
     def health():
@@ -358,7 +366,7 @@ def create_app(service):
         if 'application/json' not in request.headers.get('Accept', ''):
             return Response(receipt(record, data['token']), content_type='text/html; charset=utf-8')
         if data.get('partial') == 'true':
-            result = store.invitation(data['token'], include_votes=True)
+            result = invitation_result(store, data['token'], include_votes=True)
         else:
             result = {key:record[key] for key in ('answers', 'comment', 'updated_at')}
             result['response_version'] = response_version(record)
@@ -401,7 +409,7 @@ def create_app(service):
     @app.post('/api/invitation')
     def invitation():
         data = parameters()
-        return dict(ok=True, **event_store(data).invitation(data.get('token'), include_votes=data.get('include_votes') is True,
+        return dict(ok=True, **invitation_result(event_store(data), data.get('token'), include_votes=data.get('include_votes') is True,
                                                            include_presentations=data.get('include_presentations') is True))
 
     @app.post('/api/presentation')
@@ -423,15 +431,56 @@ def create_app(service):
     def admin():
         data = parameters()
         secret = data.get('secret')
-        if not isinstance(secret, str) or not hmac.compare_digest(secret.encode(), service.admin_secret.encode()):
-            return dict(ok=False, error='Unauthorized.'), 403
         store, organizer, action = event_store(data), service.organizer, data.get('action')
+        operator = isinstance(secret, str) and hmac.compare_digest(secret.encode(), service.admin_secret.encode())
+        if not operator:
+            token = data.get('token')
+            if not users.organizer_access(service.store, token):
+                return dict(ok=False, error='Only an organizer can change the event or running order.'), 403
+            try:
+                store.invitation(token)
+            except ValueError:
+                return dict(ok=False, error='An active organizer invitation is required.'), 403
+            # Email previews contain other people's access links; reserve them for the local sender.
+            if action not in {'dashboard', 'finalize', 'preview_schedule', 'save_schedule', 'save_programme', 'reorder_presentations', 'move_presentation',
+                              'users', 'save_user', 'email_preview', 'queue_mail', 'mail_batches', 'cancel_mail'}:
+                return dict(ok=False, error='This action requires the local administration credentials.'), 403
+        if action == 'users':
+            return dict(ok=True, **users.listing(organizer))
+        if action == 'save_user':
+            user_id = users.save(organizer, data.get('user'), data.get('version'), None if operator else data.get('token'))
+            return dict(ok=True, user_id=user_id, is_organizer=operator or users.organizer_access(service.store, data.get('token')))
+        if action == 'email_preview':
+            return dict(ok=True, **email_queue.preview(organizer, data.get('mail_event', 'next'), data.get('kind')))
+        if action == 'queue_mail':
+            batch_id = email_queue.enqueue(organizer, data.get('mail_event', 'next'), data.get('kind'), data.get('version'))
+            return dict(ok=True, batch_id=batch_id)
+        if action == 'mail_batches':
+            return dict(ok=True, batches=email_queue.listing(organizer))
+        if action == 'cancel_mail':
+            email_queue.cancel(organizer, data.get('batch_id'))
+            return dict(ok=True)
+        if action == 'preview_queued':
+            return dict(ok=True, plans=email_queue.sender_preview(organizer))
         if action == 'sync':
             return dict(ok=True, count=store.sync(data.get('invites')))
         if action == 'responses':
             return dict(ok=True, records=store.responses())
         if action == 'dashboard':
             return dict(ok=True, **store.dashboard())
+        if action == 'reorder_presentations':
+            store.invitation(data.get('token'))
+            with organizer.lock():
+                presentations.reorder(store, data.get('ordered_ids'), data.get('version'))
+            return presentation_result(store, data.get('token'))
+        if action == 'move_presentation':
+            destination = event_store(dict(event_id=data.get('destination_event_id')))
+            store.invitation(data.get('token'))
+            destination.invitation(data.get('token'))
+            with organizer.lock():
+                presentations.move(store, destination, data.get('participant_id'), data.get('version'))
+            return dict(ok=True, source=invitation_result(store, data['token'], include_presentations=True),
+                        destination=invitation_result(destination, data['token'], include_presentations=True))
         if action == 'finalize':
             with organizer.lock():
                 return dict(ok=True, state=store.select(action, data.get('slot_id'), data.get('snapshot')))
@@ -445,7 +494,7 @@ def create_app(service):
         if action == 'preview_mail':
             return dict(ok=True, **organizer.preview_mail(data.get('mail_event', data.get('event_id', 'next')), data['kind']))
         if action == 'claim_mail':
-            return dict(ok=True, **organizer.claim_mail(data['event_id'], data['kind'], data['participant_id'], data['preview'], data['message_id']))
+            return dict(ok=True, **organizer.claim_mail(data['event_id'], data['kind'], data['participant_id'], data['preview'], data['message_id'], data.get('batch_id')))
         if action == 'finish_mail':
             organizer.finish_mail(data['event_id'], data['participant_id'], data['key'], data['message_id'])
             return dict(ok=True)

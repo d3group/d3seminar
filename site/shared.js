@@ -242,8 +242,8 @@ export function voteCounts(people, slot, required) {
 export function participantRings(people) {
   return [
     {role:'professor', label:'Professors', capacity:5, radius:[14, 20], people:people.filter(person => person.role === 'professor')},
-    {role:'student', label:'Students', capacity:15, radius:[23, 29], people:people.filter(person => person.role === 'student')}
-  ];
+    {role:'student', label:'PhD researchers and other members', capacity:15, radius:[23, 29], people:people.filter(person => ['student', 'member'].includes(person.role))}
+  ].map(ring => ({...ring, capacity:Math.max(ring.capacity, ring.people.length)}));
 }
 
 export function ringArc(ring, index, part = 0, parts = 1) {

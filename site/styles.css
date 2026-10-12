@@ -181,6 +181,9 @@ h3 { font-size: 18px; line-height: 1.4; font-weight: 600; }
 .talk-table tbody th { font-weight: 500; }
 .talk-table tbody td, .talk-table tbody th { border-bottom: 1px solid var(--line); }
 .talk-presenter-email { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.talk-order-controls { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.talk-order-controls button { min-width: 32px; min-height: 32px; padding: 2px 8px; }
+.talk-order-controls select { width: 100%; min-width: 0; margin: 0; padding: 6px; font-size: 12px; }
 .talk-description > strong { display: block; font-size: 14px; margin-bottom: 6px; }
 .talk-description > a { display: inline-block; margin-top: 6px; }
 .talk-timeslot { font-variant-numeric: tabular-nums; }
@@ -441,7 +444,7 @@ textarea { display: block; width: 100%; min-height: 90px; resize: vertical; bord
 .admin-editor, .mail-controls { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
 .admin-editor > summary { cursor: pointer; font-weight: 600; font-size: 16px; margin-bottom: 16px; }
 .admin-editor label, #mail-send-form > label { display: block; font-size: 13px; margin-bottom: 6px; }
-.admin-editor input:not([type="checkbox"]), #mail-kind { display: block; max-width: 100%; min-width: 0; padding: 9px 10px; color: var(--ink); background: white; border: 1px solid #b9c8d4; border-radius: 3px; font: inherit; font-size: 13px; margin-bottom: 16px; }
+.admin-editor input:not([type="checkbox"]), #mail-kind, #mail-event, .user-form > input, .user-form > select { display: block; max-width: 100%; min-width: 0; padding: 9px 10px; color: var(--ink); background: white; border: 1px solid #b9c8d4; border-radius: 3px; font: inherit; font-size: 13px; margin-bottom: 16px; }
 .programme-form input { width: 100%; }
 .programme-form { max-width: 620px; }
 .schedule-option { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; margin-top: 12px; }
@@ -518,6 +521,7 @@ td.unavailable { color: #8e4033; }
   .talk-table caption { display: block; }
   .talk-table tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; padding: 16px 0; border-top: 1px solid var(--line); }
   .talk-table tbody th, .talk-table tbody td { display: block; width: auto; padding: 0; border: 0; }
+  .talk-table tbody th:first-child { width: auto; }
   .talk-table tbody th, .talk-description, .talk-timeslot { grid-column: 1 / -1; }
   .talk-table .agenda-open-slot > th { display: none; }
   .talk-table tbody th::before, .talk-material::before, .talk-timeslot::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); font-weight: 400; margin-bottom: 3px; }
@@ -560,3 +564,15 @@ td.unavailable { color: #8e4033; }
   .availability-choice { flex-direction: column; gap: 6px; padding-block: 10px; }
   .response-card { padding: 18px; }
 }
+.admin-sections { display:flex; gap:1.5rem; margin:1.5rem 0 2rem; border-bottom:1px solid var(--line, #d9dfe5); }
+.admin-sections button { border:0; border-bottom:3px solid transparent; border-radius:0; background:none; color:var(--muted, #626b77); padding:.7rem .2rem; font:inherit; font-weight:600; cursor:pointer; }
+.admin-sections button[aria-pressed="true"] { border-bottom-color:#214d7a; color:#214d7a; }
+.user-form { max-width:42rem; margin-bottom:2rem; }
+.user-form > label:not(.consent) { display:block; margin-top:1rem; }
+.user-form > input, .user-form > select { width:100%; }
+.user-form fieldset { margin:1.4rem 0; padding:1rem; border:1px solid #d9dfe5; }
+.user-form fieldset .consent { margin:.4rem 0; }
+.users-table th small { overflow-wrap:anywhere; }
+.user-form .danger { color:#842d38; }
+.email-batches { margin-top:2.5rem; }
+.email-batches code { overflow-wrap:anywhere; }

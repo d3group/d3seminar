@@ -67,6 +67,13 @@ def validate_snapshot(directory):
     if (directory / 'pending-edit.json').exists():
         raise ValueError('An organiser edit is pending. Restart the backend to recover it first.')
     config = json.loads((directory / 'config.json').read_text())
+    users = {}
+    with closing(sqlite3.connect((directory / 'responses.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
+        columns = {row[1] for row in connection.execute('PRAGMA table_info(users)')}
+        if {'id', 'token'} <= columns:
+            archived = 'is_archived' if 'is_archived' in columns else '0'
+            users = {key:(hashlib.sha256(token.encode()).hexdigest(), removed)
+                     for key, token, removed in connection.execute(f'SELECT id, token, {archived} FROM users')}
     for event in config['events']:
         if not re.fullmatch(r'[a-z0-9-]+', event['id']):
             raise ValueError('Invalid event identifier in the configuration.')
@@ -76,10 +83,14 @@ def validate_snapshot(directory):
         invites = json.loads((event_dir / 'invitations.json').read_text())
         with closing(sqlite3.connect((event_dir / 'responses.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
             records = [json.loads(row[0]) for row in connection.execute('SELECT data FROM invitations')]
-        expected = sorted((r['id'], r['revision'], hashlib.sha256(r['token'].encode()).hexdigest()) for r in invites)
-        actual = sorted((r['id'], r['revision'], r['token_hash']) for r in records if r['active'])
-        if not expected or expected != actual:
-            raise ValueError('Invitations and responses must be synchronized before backup.')
+        legacy = {r['id']:(r['revision'], hashlib.sha256(r['token'].encode()).hexdigest()) for r in invites}
+        for record in records:
+            if not record['active']:
+                continue
+            user = users.get(record['id'])
+            valid = user == (record['token_hash'], False) if user else legacy.get(record['id']) == (record['revision'], record['token_hash'])
+            if not valid:
+                raise ValueError('Invitations and responses must be synchronized before backup.')
 
 
 def verify_archive(archive):

@@ -11,10 +11,13 @@ from urllib.parse import urlencode
 sys.path.insert(0, str(Path(__file__).parents[1] / 'scripts'))
 import seminar
 from server import Store, create_server
+from models import User
 
 with tempfile.TemporaryDirectory() as directory:
     store = Store(Path(directory) / 'qa.sqlite3')
     config = seminar.read_json(seminar.ROOT / 'tests/fixtures/programme.json')
+    if '--admin' in sys.argv:
+        config['test_mode'] = False
     if '--presentations' in sys.argv:
         for slot in config['slots']:
             slot['start'] = slot['start'][:11] + '14:00:00+02:00'
@@ -42,6 +45,10 @@ with tempfile.TemporaryDirectory() as directory:
         threading.Thread(target=frontend.run, daemon=True).start()
     seminar.save_private(app.d3_app.organizer.config_file, config)
     token = 'T' * 43
+    if '--organizer' in sys.argv:
+        with store.session(write=True) as session:
+            session.add(User(id='d'*24, name='Browser Test', role='PhD', email='browser-test@example.com',
+                             token=token, role_status='confirmed', is_organizer=True))
     seminar.save_private(store.database.parent / 'settings.json', dict(sender_name='Test Organizer', sender_email='organizer@example.com',
         smtp_username='test-user', smtp_host='smtp.invalid', smtp_port=465, test_recipient='browser-test@example.com'))
     for entry in config['events']:

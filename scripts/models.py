@@ -2,7 +2,7 @@
 
 import json
 
-from sqlalchemy import CheckConstraint, Column, Integer, LargeBinary, Table, Text, TypeDecorator, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, Integer, LargeBinary, Table, Text, TypeDecorator, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, mapped_column
 
 
@@ -66,3 +66,11 @@ class User(Base):
     role = mapped_column(Text, nullable=False)
     token = mapped_column(Text, nullable=False, unique=True)
     role_status = mapped_column(Text, nullable=False)
+    is_organizer = mapped_column(Boolean, nullable=False, server_default='0')
+    is_archived = mapped_column(Boolean, nullable=False, server_default='0')
+
+
+class MailBatch(Base):
+    __tablename__ = 'mail_batches'
+    id = mapped_column(Text, primary_key=True)
+    data = mapped_column(JSONText, nullable=False)

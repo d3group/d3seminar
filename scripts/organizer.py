@@ -10,7 +10,8 @@ from zoneinfo import ZoneInfo
 
 import seminar
 import presentations
-from models import Invitation
+from sqlalchemy import select
+from models import Invitation, User
 
 
 def local_datetime(value, zone):
@@ -74,12 +75,30 @@ class Organizer:
         self.config = replacement
 
     def records(self, event_id):
-        records = seminar.read_json(self.directory(event_id) / 'invitations.json')
-        current = {r['id']:r for r in self.stores[event_id].responses()}
-        if set(current) != {r['id'] for r in records} or any(
-            current[r['id']]['revision'] != r['revision'] or current[r['id']]['token_hash'] != seminar.digest(r['token']) for r in records):
-            raise ValueError('Invitations and saved responses differ. Prepare and sync the event before continuing.')
+        path = self.directory(event_id) / 'invitations.json'
+        saved = {r['id']:r for r in seminar.read_json(path)} if path.exists() else {}
+        with self.stores['seminar-1'].session() as session:
+            people = {u.id:u for u in session.scalars(select(User))}
+        with self.stores[event_id].session() as session:
+            current = self.stores[event_id].records(session)
+        records = []
+        for record in current:
+            if not record['active']:
+                continue
+            previous, user = saved.get(record['id']), people.get(record['id'])
+            token = user.token if user and not user.is_archived else (previous or {}).get('token', '')
+            if (user and user.is_archived) or seminar.digest(token) != record['token_hash'] or (
+                    not user and (not previous or previous['revision'] != record['revision'])):
+                raise ValueError('Invitations and saved responses differ. Prepare and sync the event before continuing.')
+            records.append(dict({key:record[key] for key in ('id', 'name', 'email', 'poll', 'revision')},
+                                role=record.get('role', ''), token=token, deliveries=(previous or {}).get('deliveries', {})))
         return records
+
+    def save_delivery_records(self, event_id, records):
+        path = self.directory(event_id) / 'invitations.json'
+        previous = {r['id']:r for r in seminar.read_json(path)} if path.exists() else {}
+        previous.update({r['id']:r for r in records})
+        seminar.save_private(path, list(previous.values()))
 
     def preview_schedule(self, event_id, proposal):
         dashboard = self.stores[event_id].dashboard()
@@ -252,10 +271,14 @@ class Organizer:
         with self.lock():
             return self.mail_queue(event_id, kind)
 
-    def claim_mail(self, event_id, kind, participant_id, preview, message_id):
+    def claim_mail(self, event_id, kind, participant_id, preview, message_id, batch_id=None):
         if not isinstance(message_id, str) or not re.fullmatch(r'<[^<>\s]{1,250}>', message_id):
             raise ValueError('Invalid message identifier.')
         with self.lock():
+            if batch_id is not None:
+                from email_queue import approved
+                if not approved(self, batch_id, event_id, kind, participant_id, preview):
+                    return dict(claimed=False)
             queue = self.mail_queue(event_id, kind)
             row = next((m for m in queue['messages'] if m['id'] == participant_id), None)
             if not row:
@@ -265,15 +288,16 @@ class Organizer:
             records = self.records(event_id)
             invite = next(r for r in records if r['id'] == participant_id)
             invite['deliveries'][row['key']] = dict(status='attempted', at=seminar.now(), message_id=message_id)
-            seminar.save_private(self.directory(event_id) / 'invitations.json', records)
+            self.save_delivery_records(event_id, records)
             return dict(claimed=True)
 
     def finish_mail(self, event_id, participant_id, key, message_id):
         with self.lock():
-            records = self.records(event_id)
+            # A user may be removed while SMTP is in flight; retain the delivery receipt.
+            records = seminar.read_json(self.directory(event_id) / 'invitations.json')
             invite = next((r for r in records if r['id'] == participant_id), None)
             delivery = invite.get('deliveries', {}).get(key) if invite else None
             if not delivery or delivery.get('message_id') != message_id:
                 raise ValueError('This email attempt does not match the delivery record.')
             delivery.update(status='sent', sent_at=seminar.now())
-            seminar.save_private(self.directory(event_id) / 'invitations.json', records)
+            self.save_delivery_records(event_id, records)

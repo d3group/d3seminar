@@ -34,7 +34,7 @@ class DatabaseTests(unittest.TestCase):
     def assert_current(self, engine):
         with engine.connect() as connection:
             context = MigrationContext.configure(connection)
-            self.assertEqual(context.get_current_revision(), '0002_retire_conditional')
+            self.assertEqual(context.get_current_revision(), '0004_admin_panel')
             self.assertEqual(compare_metadata(context, Base.metadata), [])
 
     def test_adopts_legacy_databases_without_rewriting_any_rows(self):
@@ -47,6 +47,8 @@ class DatabaseTests(unittest.TestCase):
             db.execute('INSERT INTO presentation_files VALUES (?, ?, ?, ?, ?, ?)', ('c'*48, 'a'*24, 'slides', 'talk.pdf', 'application/pdf', b'%PDF-1.4\x00\xff'))
             db.execute('INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)', ('a'*24, 'Änne', 'anne@example.org', 'PhD', 'A'*43, 'confirmed'))
         before = self.snapshot()
+        before['users'] = [(*row, 0, 0) for row in before['users']]
+        before['mail_batches'] = []
         engine = database.make_engine(self.path)
         self.addCleanup(engine.dispose)
         database.upgrade(engine)

@@ -51,7 +51,7 @@ class UsersTests(unittest.TestCase):
         for row in rows:
             self.assertRegex(row['id'], r'^[a-f0-9]{24}$')
             self.assertRegex(row['token'], r'^[A-Za-z0-9_-]{43}$')
-        expected = sorted([dict(row, email=row['email'] or None) for row in rows], key=lambda row:row['id'])
+        expected = sorted([dict(row, email=row['email'] or None, is_organizer=0, is_archived=0) for row in rows], key=lambda row:row['id'])
         self.assertEqual(self.records(), expected)
         self.assertEqual(self.records('invitations'), before)
         self.assertEqual((self.root / 'invitations.json').read_bytes(), original_invites)
@@ -71,6 +71,22 @@ class UsersTests(unittest.TestCase):
         updated = self.read()[2]
         self.assertEqual((updated['id'], updated['token']), identity)
         self.assertEqual(updated['email'], 'cora@example.org')
+
+    def test_organizer_handover_survives_roster_import_and_rejects_unknown_users(self):
+        users.stage(self.csv, self.database)
+        original = self.records()
+        users.set_organizers(self.database, ['ada@example.org'])
+        users.stage(self.csv, self.database)
+        current = self.records()
+        self.assertEqual([row['email'] for row in current if row['is_organizer']], ['ada@example.org'])
+        self.assertEqual([{key:value for key,value in row.items() if key != 'is_organizer'} for row in current],
+                         [{key:value for key,value in row.items() if key != 'is_organizer'} for row in original])
+        for addresses in ([], ['unknown@example.org']):
+            with self.assertRaises(ValueError):
+                users.set_organizers(self.database, addresses)
+            self.assertEqual(self.records(), current)
+        users.set_organizers(self.database, ['bea@example.org'])
+        self.assertEqual([row['email'] for row in self.records() if row['is_organizer']], ['bea@example.org'])
 
     def test_invalid_roles_duplicate_emails_and_token_rotation_roll_back(self):
         users.stage(self.csv, self.database)

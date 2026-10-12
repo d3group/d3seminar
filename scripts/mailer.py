@@ -32,16 +32,16 @@ def message(plan, row):
 
 
 def run(settings, directory, kind, send=False, event='next'):
-    plan = api(settings, 'preview_mail', mail_event=event, kind=kind)
-    if plan['sender'] != settings['sender_email']:
+    plans = api(settings, 'preview_queued')['plans'] if kind == 'queued' else [api(settings, 'preview_mail', mail_event=event, kind=kind)]
+    if any(plan['sender'] != settings['sender_email'] for plan in plans):
         raise ValueError('The local sender address and organiser address differ. Update the local email settings first.')
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     outbox = directory / 'outbox'
     outbox.mkdir(exist_ok=True, mode=0o700)
-    rows = [(row, message(plan, row)) for row in plan['messages']]
-    print(f'{plan["event_name"]}: {len(rows)} {kind} email(s) from {plan["sender"]}')
-    for row, mail in rows:
-        path = outbox / f'{plan["event_id"]}-{row["id"]}-{kind}.eml'
+    rows = [(plan, row, message(plan, row)) for plan in plans for row in plan['messages']]
+    print(f'{len(rows)} {kind} email(s) from {settings["sender_email"]}')
+    for plan, row, mail in rows:
+        path = outbox / f'{plan["event_id"]}-{row["id"]}-{plan["kind"]}.eml'
         path.write_bytes(bytes(mail)); path.chmod(0o600)
         print(f'  {row["name"]} <{row["to"]}> — {row["subject"]}')
     print(f'Private message previews: {outbox}')
@@ -57,9 +57,9 @@ def run(settings, directory, kind, send=False, event='next'):
         with smtplib.SMTP_SSL(settings['smtp_host'], settings['smtp_port'], context=ssl.create_default_context(), timeout=30) as smtp:
             smtp.login(settings['smtp_username'], password)
             sent, skipped = 0, 0
-            for row, mail in rows:
-                claim = api(settings, 'claim_mail', event_id=plan['event_id'], kind=kind, participant_id=row['id'],
-                            preview=row['preview'], message_id=mail['Message-ID'])
+            for plan, row, mail in rows:
+                claim = api(settings, 'claim_mail', event_id=plan['event_id'], kind=plan['kind'], participant_id=row['id'],
+                            preview=row['preview'], message_id=mail['Message-ID'], **({'batch_id':plan['batch_id']} if 'batch_id' in plan else {}))
                 if not claim['claimed']:
                     skipped += 1
                     continue
@@ -73,7 +73,7 @@ def run(settings, directory, kind, send=False, event='next'):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('kind', choices=['setup', 'invite', 'remind', 'present', 'confirm'])
+    parser.add_argument('kind', choices=['setup', 'invite', 'remind', 'present', 'confirm', 'queued'])
     parser.add_argument('--event', default='next', help='Defaults to the next upcoming seminar; optionally choose an event id')
     parser.add_argument('--send', action='store_true', help='Send after the local password prompt; default is preview only')
     parser.add_argument('--from-settings', type=Path, default=seminar.ROOT/'data/settings.json', help='Existing private settings to import once')

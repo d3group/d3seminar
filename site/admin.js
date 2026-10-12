@@ -1,18 +1,26 @@
 import {apiFetch, loadConfig, serviceNotice} from './api.js';
-import {$, element, slotLabel, dailyHoursLabel} from './shared.js';
+import {$, element, slotLabel, dailyHoursLabel, preserveInvitationLinks} from './shared.js';
 const eventId = new URLSearchParams(location.search).get('event') || 'seminar-1';
 const secret = new URLSearchParams(location.hash.slice(1)).get('key');
-history.replaceState(null, '', location.pathname + location.search);
-let dashboard, schedulePreview;
+const token = new URLSearchParams(location.hash.slice(1)).get('token');
+if (secret) history.replaceState(null, '', location.pathname + location.search);
+preserveInvitationLinks(token);
+if (token) {
+  const back = $('back-to-agenda'); back.hidden = false;
+  back.href = 'agenda.html?' + new URLSearchParams({event:eventId}) + '#' + new URLSearchParams({token});
+}
+let dashboard, schedulePreview, mailPreview, roster, editingUser, editingVersion, programmeConfig;
+let userBusy = false;
 const names = {available:'Available', unavailable:'Unavailable'};
 function notice(text, error = false) {
-  $('admin-notice').textContent = text; $('admin-notice').classList.toggle('error', error);
+  $('admin-notice').textContent = text; $('admin-notice').hidden = !text; $('admin-notice').classList.toggle('error', error);
 }
 function when(slot) { return slotLabel(slot, dashboard.poll.timezone, dashboard.poll.daily_hours); }
 
 async function api(action, data = {}) {
-  const response = await apiFetch('admin', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action, secret, event_id:eventId, ...data})});
+  const response = await apiFetch('admin', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action, secret, token, event_id:eventId, ...data})});
   const result = await response.json();
+  if (response.status === 403) { $('dashboard').hidden = true; $('admin-panels').hidden = true; notice(result.error, true); }
   if (!response.ok || !result.ok) throw new Error(result.error || 'The request failed.');
   return result;
 }
@@ -58,7 +66,7 @@ function render() {
   $('people-rows').replaceChildren();
   for (const person of d.participants) {
     const row = document.createElement('tr'), label = document.createElement('th');
-    label.append(element('strong', person.name), element('small', person.email), element('small', {professor:'Professor', student:'Student'}[person.role] || 'Role unassigned'), element('small', person.complete ? 'Complete' : 'Awaiting answers'));
+    label.append(element('strong', person.name), element('small', person.email), element('small', {professor:'Professor', student:'PhD', member:'Member'}[person.role] || 'Role unassigned'), element('small', person.complete ? 'Complete' : 'Awaiting answers'));
     row.append(label);
     for (const slot of d.slots) row.append(element('td', names[person.answers[slot.id]] || 'Awaiting reply', person.answers[slot.id] || 'unknown'));
     const note = element('td', person.comment || 'No note');
@@ -74,7 +82,7 @@ function localInput(value, dateOnly = false) {
 }
 function clearSchedulePreview() { schedulePreview = null; $('schedule-review').hidden = true; }
 function clearMailPreview() {
-  $('mail-review').hidden = true;
+  mailPreview = null; $('mail-review').hidden = true;
 }
 function addOption(slot) {
   const onsite = Boolean(dashboard.poll.daily_hours);
@@ -143,14 +151,19 @@ $('programme-form').addEventListener('submit', async event => {
   } catch (error) { notice(error.message, true); }
   finally { button.disabled = false; }
 });
-$('mail-kind').addEventListener('change', () => { clearMailPreview(); mailNotice(''); });
+$('mail-kind').addEventListener('change', () => {
+  $('mail-event').value = $('mail-kind').value === 'confirm' ? eventId : 'next';
+  clearMailPreview(); mailNotice('');
+});
+$('mail-event').addEventListener('change', () => { clearMailPreview(); mailNotice(''); });
 $('mail-preview-form').addEventListener('submit', async event => {
   event.preventDefault(); const button = event.submitter; button.disabled = true; clearMailPreview();
-  const kind = $('mail-kind').value;
+  const kind = $('mail-kind').value, mailEvent = $('mail-event').value;
   try {
-    const preview = await api('preview_mail', {kind, mail_event:kind === 'confirm' ? eventId : 'next'});
-    if (kind !== $('mail-kind').value) return;
-    $('mail-count').textContent = `${preview.messages.length} email${preview.messages.length === 1 ? '' : 's'} from ${preview.sender}`;
+    const preview = await api('email_preview', {kind, mail_event:mailEvent});
+    if (kind !== $('mail-kind').value || mailEvent !== $('mail-event').value) return;
+    mailPreview = preview;
+    $('mail-count').textContent = `${preview.event_name}: ${preview.messages.length} email${preview.messages.length === 1 ? '' : 's'} from ${preview.sender}`;
     $('mail-messages').replaceChildren();
     preview.messages.forEach((mail, index) => {
       const details = element('details', '', 'mail-message'); details.open = index === 0;
@@ -158,18 +171,128 @@ $('mail-preview-form').addEventListener('submit', async event => {
       $('mail-messages').append(details);
     });
     $('mail-review').hidden = false;
-    mailNotice(preview.messages.length ? 'Preview only. Send from the local email service on your computer.' : 'No eligible messages for this email type. Previous deliveries and current responses have been checked.');
+    $('queue-mail').disabled = !preview.messages.length;
+    mailNotice(preview.messages.length ? 'Personal links are hidden in this preview. Queue these emails, then send with the local email service.' : 'No eligible messages for this email type. Previous deliveries and current responses have been checked.');
   } catch (error) { mailNotice(error.message, true); }
   finally { button.disabled = false; }
 });
+$('queue-mail').addEventListener('click', async () => {
+  if (!mailPreview) return;
+  $('queue-mail').disabled = true;
+  try {
+    await api('queue_mail', {kind:mailPreview.kind, mail_event:mailPreview.event_id, version:mailPreview.version});
+    clearMailPreview();
+    await refreshMail(); mailNotice('Emails queued. Nothing has been sent. Run the local sender when you are ready.');
+  } catch (error) { mailNotice(error.message, true); $('queue-mail').disabled = false; }
+});
+const mailKinds = {invite:'Timing invitation', remind:'Availability reminder', present:'Talk proposal nudge', confirm:'Final confirmation'};
+const deliveryNames = {ready:'Ready for local sender', sent:'Sent', attempted:'Attempted · check delivery', skipped:'No longer eligible', review:'Changed · preview again', cancelled:'Cancelled'};
+async function refreshMail() {
+  const result = await api('mail_batches');
+  $('mail-batches').replaceChildren();
+  if (!result.batches.length) $('mail-batches').append(element('p', 'No emails queued yet.', 'admin-help'));
+  for (const batch of result.batches) {
+    const card = element('details', '', 'mail-message');
+    card.append(element('summary', `${batch.event_name} · ${mailKinds[batch.kind]} · ${batch.recipients.length} recipients`));
+    card.append(element('p', Object.entries(batch.counts).map(([key, count]) => `${count} ${deliveryNames[key]}`).join(' · '), 'admin-help'));
+    if (batch.error) card.append(element('p', batch.error, 'notice error'));
+    const list = document.createElement('ul');
+    for (const person of batch.recipients) list.append(element('li', `${person.name} · ${person.to} · ${deliveryNames[person.status]}`));
+    card.append(list);
+    if (!batch.cancelled && (batch.counts.ready || batch.counts.review)) {
+      const cancel = element('button', 'Cancel unsent emails', 'text-button'); cancel.type = 'button';
+      cancel.addEventListener('click', async () => {
+        cancel.disabled = true;
+        try { await api('cancel_mail', {batch_id:batch.id}); await refreshMail(); mailNotice('Unsent emails cancelled. Messages already claimed may still be delivered.'); }
+        catch (error) { mailNotice(error.message, true); cancel.disabled = false; }
+      });
+      card.append(cancel);
+    }
+    $('mail-batches').append(card);
+  }
+}
+$('refresh-mail').addEventListener('click', () => refreshMail().catch(error => mailNotice(error.message, true)));
+
+function userNotice(message, error = false) {
+  $('users-notice').hidden = !message; $('users-notice').textContent = message; $('users-notice').classList.toggle('error', error);
+}
+function renderUsers() {
+  $('user-rows').replaceChildren();
+  const active = roster.users.filter(person => !person.is_archived);
+  $('users-count').textContent = `${active.length} users · ${active.filter(person => person.is_organizer).length} organizers`;
+  for (const person of roster.users.filter(person => !person.is_archived || $('show-removed').checked)) {
+    const row = document.createElement('tr'), name = element('th', person.name); name.scope = 'row';
+    name.append(element('small', person.email || 'Email to follow')); row.append(name, element('td', person.role));
+    row.append(element('td', person.is_archived ? 'Removed' : person.is_organizer ? 'Organizer' : person.events.length ? 'Participant' : 'Draft'));
+    row.append(element('td', person.events.map(id => programmeConfig.events.find(event => event.id === id)?.name || id).join(', ') || '—'));
+    const actions = document.createElement('td'), edit = element('button', person.is_archived ? 'Restore user' : 'Edit user', 'text-button'); edit.type = 'button';
+    edit.setAttribute('aria-label', `${person.is_archived ? 'Restore' : 'Edit'} ${person.name}`);
+    edit.addEventListener('click', () => openUser(person)); actions.append(edit); row.append(actions); $('user-rows').append(row);
+  }
+}
+async function refreshUsers() { roster = await api('users'); renderUsers(); }
+function openUser(person = null) {
+  if (userBusy || !roster) return;
+  editingUser = person; editingVersion = roster.version;
+  $('user-form-heading').textContent = person ? `${person.is_archived ? 'Restore' : 'Edit'} ${person.name}` : 'Add user';
+  $('user-name').value = person?.name || ''; $('user-email').value = person?.email || '';
+  $('user-role').value = person?.role || 'PhD'; $('user-organizer').checked = Boolean(person?.is_organizer);
+  $('user-events').querySelectorAll('input').forEach(input => { input.checked = Boolean(person?.events.includes(input.value)); });
+  $('remove-user').hidden = !person || person.is_archived;
+  $('user-form').hidden = false; userNotice(''); $('user-name').focus();
+}
+async function saveUser(user) {
+  userBusy = true;
+  $('user-form').querySelectorAll('input, select, button').forEach(control => { control.disabled = true; });
+  try {
+    const saved = await api('save_user', {user, version:editingVersion});
+    $('user-form').hidden = true; clearMailPreview();
+    if (!saved.is_organizer) {
+      $('admin-panels').hidden = true; notice('User saved. Your organizer access has been removed.'); return;
+    }
+    await refreshUsers();
+    userNotice(user.is_archived ? 'User removed. Their access is revoked; saved responses and talks are retained.' : 'User saved. No email has been sent.');
+  } catch (error) { userNotice(error.message, true); }
+  finally { userBusy = false; $('user-form').querySelectorAll('input, select, button').forEach(control => { control.disabled = false; }); }
+}
+$('user-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (userBusy) return;
+  saveUser({...(editingUser ? {id:editingUser.id} : {}), name:$('user-name').value, email:$('user-email').value,
+    role:$('user-role').value, is_organizer:$('user-organizer').checked, is_archived:false,
+    events:[...$('user-events').querySelectorAll('input:checked')].map(input => input.value)});
+});
+$('remove-user').addEventListener('click', () => {
+  if (userBusy || !editingUser || !confirm(`Remove ${editingUser.name}? Their invitation links will stop working. Saved responses and talks will be retained.`)) return;
+  const user = Object.fromEntries(['id', 'name', 'email', 'role', 'is_organizer', 'events'].map(key => [key, editingUser[key]]));
+  saveUser({...user, is_archived:true});
+});
+$('add-user').addEventListener('click', () => openUser());
+$('cancel-user').addEventListener('click', () => { $('user-form').hidden = true; });
+$('show-removed').addEventListener('change', renderUsers);
+$('refresh-users').addEventListener('click', () => refreshUsers().catch(error => userNotice(error.message, true)));
+document.querySelectorAll('[data-panel]').forEach(button => button.addEventListener('click', async () => {
+  const panel = button.dataset.panel;
+  $('admin-event-title').textContent = panel === 'events' ? programmeConfig.events.find(event => event.id === eventId).name : 'Organizer dashboard';
+  if (panel !== 'events') notice('');
+  document.querySelectorAll('[data-panel]').forEach(tab => {
+    const selected = tab === button; tab.setAttribute('aria-pressed', String(selected)); $('panel-' + tab.dataset.panel).hidden = !selected;
+  });
+  try {
+    if (panel === 'users') await refreshUsers();
+    else if (panel === 'email') await refreshMail();
+    else await refresh();
+  } catch (error) { notice(error.message, true); }
+}));
 async function refresh() {
   dashboard = await api('dashboard'); notice('Showing saved responses. Refresh to check for updates.'); render();
 }
 $('refresh').addEventListener('click', () => refresh().catch(error => notice(error.message, true)));
-if (!secret) notice('Open this private dashboard with: python3 scripts/seminar.py admin. Reopen it that way after reloading this page.', true);
+if (!secret && !token) notice('Open the organizer dashboard through your personal invitation link.', true);
 else start().catch(error => notice(error.message, true));
 async function start() {
   const config = await loadConfig();
+  programmeConfig = config;
   if (config.service_status !== 'ready') throw new Error(serviceNotice(config));
   const selected = config.events.find(event => event.id === eventId);
   if (!selected) throw new Error('Unknown event. Reopen the organizer dashboard.');
@@ -178,10 +301,14 @@ async function start() {
   $('admin-semester').textContent = selected.semester || config.semester;
   for (const event of config.events) {
     const link = element('a', event.name);
-    link.href = 'admin.html?' + new URLSearchParams({event:event.id}) + '#' + new URLSearchParams({key:secret});
+    link.href = 'admin.html?' + new URLSearchParams({event:event.id}) + '#' + new URLSearchParams(secret ? {key:secret} : {token});
     if (event.id === eventId) link.setAttribute('aria-current', 'page');
     $('event-tabs').append(link);
+    const option = element('option', event.name); option.value = event.id; $('mail-event').append(option);
+    const label = element('label', '', 'consent'), checkbox = document.createElement('input');
+    checkbox.type = 'checkbox'; checkbox.value = event.id; label.append(checkbox, document.createTextNode(event.name)); $('user-events').append(label);
   }
   $('confirm-command').textContent = `python3 scripts/mailer.py confirm --event ${eventId}`;
   await refresh();
+  $('admin-panels').hidden = false;
 }
