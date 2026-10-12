@@ -3,8 +3,8 @@ import {preserveInvitationLinks, participantRings, ringArc} from './shared.js';
 preserveInvitationLinks(new URLSearchParams(location.hash.slice(1)).get('token'));
 
 const people = [
-  {name:'Alex', role:'professor'}, {name:'Sam', role:'student'},
-  {name:'Robin', role:'student'}, {name:'Casey', role:'student'}
+  {name:'Person A', role:'professor'}, {name:'Person B', role:'student'},
+  {name:'Person C', role:'student'}, {name:'Person D', role:'student'}
 ];
 const examples = {4:['available', 'available', 'unavailable', 'unknown'], 5:['unavailable', 'unknown', 'available', 'available']};
 const labels = {available:'Available', unavailable:'Unavailable', unknown:'Awaiting reply'};
