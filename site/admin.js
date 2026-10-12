@@ -12,6 +12,7 @@ if (token) {
 let dashboard, schedulePreview, mailPreview, roster, editingUser, editingVersion, programmeConfig;
 let userBusy = false;
 let mailDraft, draftRequest = 0, draftSaving = false, draftTarget = 'draft-body';
+let exampleTimer, exampleRequest = 0;
 const draftBuffers = new Map();
 const names = {available:'Available', unavailable:'Unavailable'};
 function notice(text, error = false) {
@@ -178,6 +179,43 @@ function updateDraftButtons() {
   $('save-draft').disabled = !mailDraft || !draftChanged() || draftSaving;
   $('preview-emails').disabled = !mailDraft || draftChanged() || draftSaving;
 }
+function updateEmailExample(delay = 300) {
+  clearTimeout(exampleTimer);
+  const pending = ++exampleRequest, entry = mailDraft;
+  $('draft-example').hidden = !entry;
+  if (!entry) { $('draft-example-message').hidden = true; return; }
+  const {kind, event_id:mailEvent} = entry.saved, {subject, body} = entry;
+  $('draft-example').setAttribute('aria-busy', 'true');
+  $('draft-example-status').textContent = 'Updating preview…';
+  $('draft-example-status').classList.remove('error');
+  exampleTimer = setTimeout(async () => {
+    try {
+      const example = await api('email_example', {kind, mail_event:mailEvent, subject, body});
+      if (pending !== exampleRequest) return;
+      $('draft-example-subject').textContent = example.subject;
+      $('draft-example-from').textContent = `${example.sender_name} <${example.sender}>`;
+      $('draft-example-to').textContent = example.to;
+      const document = new DOMParser().parseFromString(example.html, 'text/html');
+      // The sender escapes draft text. Apply its email styles through our CSP-approved stylesheet.
+      document.querySelectorAll('[style]').forEach(node => node.removeAttribute('style'));
+      document.querySelectorAll('a').forEach(link => link.removeAttribute('href'));
+      $('draft-example-body').replaceChildren(...document.body.childNodes);
+      $('draft-example-attachments').hidden = !example.attachments.length;
+      $('draft-example-attachments').textContent = 'Attachment: ' + example.attachments.join(', ');
+      $('draft-example-message').hidden = false;
+      $('draft-example-status').textContent = example.provisional
+        ? 'Example uses the first candidate date. The event is not yet confirmed.'
+        : 'Preview of your current wording. Nothing has been sent.';
+    } catch (error) {
+      if (pending !== exampleRequest) return;
+      $('draft-example-message').hidden = true;
+      $('draft-example-status').textContent = error.message;
+      $('draft-example-status').classList.add('error');
+    } finally {
+      if (pending === exampleRequest) $('draft-example').setAttribute('aria-busy', 'false');
+    }
+  }, delay);
+}
 function renderDraft(entry) {
   mailDraft = entry;
   $('draft-heading').textContent = `Draft · ${entry.saved.event_name}`;
@@ -198,6 +236,7 @@ function renderDraft(entry) {
   }
   $('mail-draft-form').hidden = false;
   updateDraftButtons();
+  updateEmailExample(0);
   draftNotice(draftChanged() ? 'Unsaved changes. Save the draft before previewing recipients.'
     : entry.saved.updated_at ? 'Saved draft. Preview recipients when you are ready.' : 'Default wording. Edit it here, or preview it as it is.');
 }
@@ -205,6 +244,7 @@ function editDraft() {
   if (!mailDraft) return;
   mailDraft.subject = $('draft-subject').value; mailDraft.body = $('draft-body').value;
   clearMailPreview(); updateDraftButtons();
+  updateEmailExample();
   draftNotice(draftChanged() ? 'Unsaved changes. Save the draft before previewing recipients.' : 'Saved wording restored.');
 }
 for (const id of ['draft-subject', 'draft-body']) {
@@ -216,6 +256,7 @@ async function loadMailDraft(reload = false) {
   const kind = $('mail-kind').value, mailEvent = $('mail-event').value, key = kind + ':' + mailEvent;
   const pending = ++draftRequest, buffer = draftBuffers.get(key);
   clearMailPreview(); mailDraft = null; updateDraftButtons(); $('mail-draft-form').hidden = true;
+  updateEmailExample();
   if (!reload && draftChanged(buffer)) { renderDraft(buffer); return; }
   draftNotice('Loading draft…');
   try {

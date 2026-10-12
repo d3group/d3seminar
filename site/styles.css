@@ -591,3 +591,22 @@ td.unavailable { color: #8e4033; }
 #draft-fields { display:flex; flex-wrap:wrap; gap:.4rem; margin:.75rem 0; }
 #draft-fields button { background:#fff; color:var(--link); border:1px solid var(--line); padding:.4rem .65rem; font-size:12px; }
 #draft-notice { margin:0; padding:.5rem 0; }
+.mail-draft-layout { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); gap:1.5rem; align-items:start; }
+.draft-example { min-width:0; margin-top:1rem; border:1px solid var(--line); background:white; }
+.draft-example h4 { margin:1rem 1.1rem .4rem; font-size:15px; }
+.draft-example > .admin-help { margin:0 1.1rem; }
+#draft-example-status { padding:.65rem 1.1rem; margin:0; }
+.draft-example[aria-busy="true"] #draft-example-message { opacity:.45; }
+.draft-envelope { padding:1rem 1.1rem; border-block:1px solid var(--line); background:var(--soft); overflow-wrap:anywhere; }
+.draft-envelope .mail-subject { margin:0 0 .7rem; }
+.draft-envelope dl { display:grid; grid-template-columns:auto minmax(0, 1fr); gap:.3rem .75rem; margin:0; font-size:12px; }
+.draft-envelope dt { color:var(--muted); }
+.draft-envelope dd { margin:0; }
+.draft-email-body { padding:1.1rem; max-height:70vh; overflow:auto; overflow-wrap:anywhere; }
+.draft-email-body > div { font:15px/1.7 Arial,sans-serif; max-width:600px; color:#152d35; }
+.draft-email-body p { margin:0 0 18px; }
+.draft-email-body a { color:#0000ee; text-decoration:underline; cursor:default; }
+#draft-example-attachments { border-top:1px solid var(--line); padding:1rem 1.1rem; margin:0; }
+@media (max-width:800px) {
+  .mail-draft-layout { grid-template-columns:minmax(0, 1fr); }
+}

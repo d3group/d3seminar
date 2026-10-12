@@ -121,6 +121,17 @@ class SeminarTests(unittest.TestCase):
         self.assertIn(b'DTSTART:20261009T120000Z', attachments[0]['content'].encode())
         self.assertIn(b'DTEND:20261009T140000Z', attachments[0]['content'].encode())
 
+    def test_timing_emails_use_the_saved_deadline_in_event_local_time(self):
+        invite = self.invites()[0]
+        for instant, expected in [('2026-10-16T15:00:00+00:00', 'Friday, 16 October 2026 at 17:00'),
+                                  ('2026-11-10T16:00:00+00:00', 'Tuesday, 10 November 2026 at 17:00')]:
+            invite['poll']['deadline'] = instant
+            for kind in ('initial', 'invite', 'remind'):
+                mail = seminar.message_content(CONFIG, seminar.settings(), invite, kind)
+                notice = 'Please set your preferences by ' + expected + ' (Europe/Berlin).'
+                self.assertIn(notice, mail['body'])
+                self.assertIn(notice, mail['html'])
+
     def test_timing_emails_and_student_presentation_nudges_are_separate(self):
         for role in ('student', 'professor', ''):
             invite = dict(self.invites()[0], role=role)

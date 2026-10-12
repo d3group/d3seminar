@@ -100,6 +100,7 @@
         <section class="mail-draft" aria-labelledby="draft-heading">
           <div class="dashboard-summary"><h3 id="draft-heading">Email draft</h3><button id="reload-draft" class="text-button" type="button">Reload saved draft</button></div>
           <p id="draft-notice" class="notice" role="status" aria-live="polite" hidden></p>
+          <div class="mail-draft-layout">
           <form id="mail-draft-form" hidden>
             <label for="draft-subject">Subject</label><input id="draft-subject" type="text" maxlength="250" required>
             <label for="draft-body">Message</label><textarea id="draft-body" rows="17" maxlength="20000" spellcheck="true" required></textarea>
@@ -108,6 +109,20 @@
             <p class="admin-help">Test labels, the personal-link privacy note and confirmation calendar attachments are added automatically.</p>
             <div class="save-actions"><button id="save-draft" class="primary" type="submit">Save draft</button><button id="default-draft" class="text-button" type="button">Use default wording</button></div>
           </form>
+          <aside id="draft-example" class="draft-example" aria-labelledby="draft-example-heading" hidden>
+            <h4 id="draft-example-heading">Example preview</h4>
+            <p class="admin-help">Updates as you edit. Person A is a fictional recipient; links are inactive.</p>
+            <p id="draft-example-status" class="notice" role="status" aria-live="polite"></p>
+            <div id="draft-example-message" hidden>
+              <div class="draft-envelope">
+                <p id="draft-example-subject" class="mail-subject"></p>
+                <dl><dt>From</dt><dd id="draft-example-from"></dd><dt>To</dt><dd id="draft-example-to"></dd></dl>
+              </div>
+              <div id="draft-example-body" class="draft-email-body"></div>
+              <p id="draft-example-attachments" class="admin-help" hidden></p>
+            </div>
+          </aside>
+          </div>
         </section>
         <button id="preview-emails" class="secondary" type="submit" form="mail-preview-form" disabled>Preview recipients and emails</button>
         <p id="mail-notice" class="notice" role="status" hidden></p>

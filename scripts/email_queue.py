@@ -35,6 +35,29 @@ def save_draft(organizer, event_id, kind, content, version):
         return draft(organizer, current['event_id'], kind)
 
 
+def example(organizer, event_id, kind, content):
+    mail_templates.validate(content, kind)
+    with organizer.lock():
+        event_id = organizer.mail_event_id(event_id, kind)
+        config = seminar.event_config(organizer.config, event_id)
+        local = seminar.read_json(organizer.private / 'settings.json')
+        dashboard = organizer.stores[event_id].dashboard()
+        config.update(dashboard['poll'] or {})
+        poll, state = seminar.poll_data(config), dashboard['state']
+        provisional = kind == 'confirm' and not state.get('final_event')
+        if provisional:
+            state = seminar.programme_state(dict(state, final_event=seminar.event_data(config, poll['slots'][0])))
+        later = []
+        if kind == 'present':
+            upcoming = organizer.upcoming_seminars()
+            index = next((i for i, event in enumerate(upcoming) if event['id'] == event_id), None)
+            later = upcoming[index+1:] if index is not None else []
+        person = dict(name='Person A', email='person.a@example.org', role='student', token='example-link', poll=poll)
+        mail = seminar.message_content(config, local, person, kind, state, later, content)
+        return dict(mail, sender=local['sender_email'], sender_name=local['sender_name'], provisional=provisional,
+                    attachments=[part['name'] for part in mail['attachments']])
+
+
 def review(plan):
     messages = [dict(id=row['id'], name=row['name'], to=row['to'], subject=row['subject'],
                      body=re.sub(r'(?<=token=)[A-Za-z0-9_-]{43}', '[personal-link]', row['body']),

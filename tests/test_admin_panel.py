@@ -57,7 +57,7 @@ class AdminPanelTests(unittest.TestCase):
         return self.api('save_user', user=dict(payload, **changes), version=self.roster()['version'])
 
     def test_users_permissions_handover_and_safe_removal(self):
-        for action in ('users', 'save_user', 'email_preview', 'email_draft', 'save_email_draft', 'queue_mail', 'mail_batches', 'cancel_mail'):
+        for action in ('users', 'save_user', 'email_preview', 'email_draft', 'email_example', 'save_email_draft', 'queue_mail', 'mail_batches', 'cancel_mail'):
             self.assertEqual(self.api(action, token='B'*43).status_code, 403)
         original = self.roster()['users'][0]
         self.assertNotIn('token', original)
@@ -194,6 +194,36 @@ class AdminPanelTests(unittest.TestCase):
             invalid = dict(edited, version=saved['version'], **changes)
             self.assertEqual(self.api('save_email_draft', **invalid).status_code, 400)
         self.assertEqual(self.api('email_draft', kind='invite', mail_event='seminar-1').json, saved)
+
+    def test_unsaved_email_examples_use_sender_renderer_without_changing_data(self):
+        before = self.store.dashboard()
+        for kind in ('initial', 'invite', 'remind', 'present', 'confirm'):
+            event_id = 'onsite' if kind == 'confirm' else 'seminar-1'
+            saved = self.api('email_draft', kind=kind, mail_event=event_id).json
+            content = dict(subject='For {name}: {event_name}', body=saved['body']+'\nNew idea: <img src=x onerror=alert(1)>')
+            result = self.api('email_example', kind=kind, mail_event=event_id, **content)
+            self.assertEqual(result.status_code, 200, result.json)
+            example = result.json
+            self.assertIn('Person A', example['subject'])
+            self.assertEqual(example['to'], 'person.a@example.org')
+            self.assertNotIn('A'*43, str(example))
+            self.assertNotIn('<img', example['html'])
+            self.assertIn('&lt;img', example['html'])
+            self.assertEqual(example['provisional'], kind == 'confirm')
+            config = seminar.event_config(self.service.config, event_id)
+            poll = self.service.stores[event_id].dashboard()['poll']
+            state = dict(final_event=seminar.event_data(config, poll['slots'][0])) if kind == 'confirm' else {}
+            invite = dict(name='Person A', email='person.a@example.org', token='example-link', role='student', poll=poll)
+            later = self.service.organizer.upcoming_seminars()[1:] if kind == 'present' else []
+            expected = seminar.message_content(config, self.settings, invite, kind, state, later, content)
+            for key in ('subject', 'body', 'html'):
+                self.assertEqual(example[key], expected[key])
+            self.assertEqual(example['attachments'], [part['name'] for part in expected['attachments']])
+            self.assertEqual(self.api('email_draft', kind=kind, mail_event=event_id).json, saved)
+        self.assertEqual(self.store.dashboard(), before)
+        self.assertEqual(self.api('mail_batches').json['batches'], [])
+        self.assertFalse(self.service.stores['onsite'].dashboard()['state'].get('final_event'))
+        self.assertEqual(self.api('email_example', kind='invite', subject='{unknown}', body=content['body']).status_code, 400)
 
     def test_editing_a_queued_draft_requires_a_new_preview_before_delivery(self):
         preview = self.api('email_preview', kind='initial', mail_event='next').json
