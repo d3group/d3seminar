@@ -169,7 +169,7 @@ class StoreTests(unittest.TestCase):
         self.store.sync([first])
         public = self.store.public_event(POLL)
         self.assertEqual(public['totals'][SLOT], dict(available=1, unavailable=0, unknown=2))
-        with self.store.connect() as connection:
+        with self.store.session(write=True) as connection:
             self.store.write_state(connection, dict(final_event=dict(seminar.event_data(poll, poll['slots'][0]), programme=talk), programme=talk))
         public = self.store.public_event(POLL)
         self.assertEqual(public['final_event'], {key:seminar.event_data(poll, poll['slots'][0])[key] for key in ('slot_id', 'start', 'end')})
@@ -211,30 +211,32 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.invitation(TOKEN)['answers'], {})
         with self.assertRaisesRegex(ValueError, 'changed'):
             self.store.respond(RESPONSE)
-        with self.store.connect() as connection:
-            history = json.loads(connection.execute('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
+        with self.store.session(write=True) as connection:
+            history = json.loads(connection.connection().exec_driver_sql('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
         self.assertEqual(history['records'][0]['answers'], {SLOT:'available'})
 
     def test_legacy_conditional_answers_are_archived_and_become_unanswered(self):
         self.store.respond(dict(RESPONSE, comment='Preserve this note'))
         other_slot = POLL['slots'][1]['id']
-        with self.store.connect() as connection:
+        with self.store.session(write=True) as connection:
             record = self.store.records(connection)[0]
             record['answers'][other_slot] = 'if_needed'
-            connection.execute('UPDATE invitations SET data=? WHERE id=?', (json.dumps(record), record['id']))
+            connection.connection().exec_driver_sql('UPDATE invitations SET data=? WHERE id=?', (json.dumps(record), record['id']))
             self.store.write_state(connection, dict(proposed_slot_id=other_slot, proposal_id='old', programme=dict(topic='Keep this')))
+            connection.connection().exec_driver_sql("UPDATE alembic_version SET version_num='0001_initial'")
         self.store = Store(self.store.database)
         current = self.store.invitation(TOKEN)
         self.assertEqual(current['answers'], {SLOT:'available'})
         self.assertEqual(current['comment'], 'Preserve this note')
         self.assertEqual(current['state'], dict(programme=dict(topic='Keep this')))
-        with self.store.connect() as connection:
-            before = connection.execute('SELECT COUNT(*) FROM history').fetchone()[0]
-            history = json.loads(connection.execute('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
+        with self.store.session(write=True) as connection:
+            before = connection.connection().exec_driver_sql('SELECT COUNT(*) FROM history').fetchone()[0]
+            history = json.loads(connection.connection().exec_driver_sql('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
         self.assertEqual(history['records'][0]['answers'][other_slot], 'if_needed')
         Store(self.store.database)
-        with self.store.connect() as connection:
-            self.assertEqual(connection.execute('SELECT COUNT(*) FROM history').fetchone()[0], before)
+        with self.store.session(write=True) as connection:
+            self.assertEqual(connection.connection().exec_driver_sql('SELECT COUNT(*) FROM history').fetchone()[0], before)
+            self.assertEqual(connection.connection().exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0002_retire_conditional')
         with self.assertRaises(ValueError):
             self.store.respond(dict(RESPONSE, **{'answer:' + other_slot:'if_needed'}))
 
@@ -252,12 +254,12 @@ class StoreTests(unittest.TestCase):
         legacy = dict(INVITE, active=True, response='confirmed', comment='Old RSVP', updated_at='old')
         del legacy['poll']
         legacy['revision'] = 'b' * 64
-        with self.store.connect() as connection:
-            connection.execute('UPDATE invitations SET data=?', (json.dumps(legacy),))
+        with self.store.session(write=True) as connection:
+            connection.connection().exec_driver_sql('UPDATE invitations SET data=?', (json.dumps(legacy),))
         self.store.sync([INVITE])
         self.assertEqual(self.store.invitation(TOKEN)['answers'], {})
-        with self.store.connect() as connection:
-            history = json.loads(connection.execute('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
+        with self.store.session(write=True) as connection:
+            history = json.loads(connection.connection().exec_driver_sql('SELECT data FROM history ORDER BY rowid DESC').fetchone()[0])
         self.assertEqual(history['records'][0]['response'], 'confirmed')
 
 
@@ -478,6 +480,24 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.request('GET', '/agenda.html')[0], 200)
         self.assertEqual(self.request('GET', '/agenda.js')[0], 200)
 
+    def test_http_errors_keep_security_headers_and_cors_without_exposing_details(self):
+        url = seminar.urlparse(self.server.d3_app.config['site_url'])
+        origin = f'{url.scheme}://{url.netloc}'
+        before = self.store.invitation(TOKEN)
+        for path, body, status in [('/api/invitation', '{', 400), ('/api/invitation', '[]', 400),
+                                   ('/api/invitation', ' ' * 150001, 400), ('/api/missing', '{}', 404)]:
+            connection = http.client.HTTPConnection('127.0.0.1', self.port)
+            connection.request('POST', path, body, {'Content-Type':'application/json', 'Origin':origin})
+            response = connection.getresponse()
+            self.assertEqual(response.status, status)
+            self.assertEqual(response.getheader('Access-Control-Allow-Origin'), origin)
+            self.assertEqual(response.getheader('Cache-Control'), 'no-store')
+            self.assertEqual(response.getheader('X-Content-Type-Options'), 'nosniff')
+            self.assertIn("frame-ancestors 'none'", response.getheader('Content-Security-Policy'))
+            self.assertFalse(json.loads(response.read())['ok'])
+            connection.close()
+        self.assertEqual(self.store.invitation(TOKEN), before)
+
     def test_proxy_accepts_only_configured_frontend_and_local_cli(self):
         headers = {'Host':'localhost:8080', 'Origin':'http://localhost:8080'}
         self.assertEqual(self.request('GET', '/health', headers=headers)[0], 403)
@@ -536,8 +556,8 @@ class HTTPTests(unittest.TestCase):
 
     def test_public_event_never_grants_write_access_or_individual_responses(self):
         headers = {'Content-Type':'application/json'}
-        with self.store.connect() as connection:
-            before = list(connection.iterdump())
+        with self.store.session(write=True) as connection:
+            before = list(connection.connection().connection.driver_connection.iterdump())
         for token in (None, 'X'*43, TOKEN):
             status, body = self.request('POST', '/api/public-event', json.dumps(dict(token=token, include_votes=True, include_presentations=True, action='finalize')), headers)
             self.assertEqual(status, 200)
@@ -555,8 +575,8 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(status, 400)
             status, _ = self.request('POST', '/api/admin', json.dumps(dict(action='finalize', slot_id=SLOT, secret=token)), headers)
             self.assertEqual(status, 403)
-        with self.store.connect() as connection:
-            self.assertEqual(list(connection.iterdump()), before)
+        with self.store.session(write=True) as connection:
+            self.assertEqual(list(connection.connection().connection.driver_connection.iterdump()), before)
 
     def test_real_form_post_writes_sqlite_before_success_receipt(self):
         current = dict(RESPONSE, response_version=self.store.invitation(TOKEN)['response_version'])
