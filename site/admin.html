@@ -9,6 +9,11 @@
 <body>
   <header class="masthead">
     <a class="university-brand" href="https://www.uni-wuerzburg.de/" aria-label="University of Würzburg"><img class="university-logo" src="assets/uni-wuerzburg.svg" width="347" height="152" alt="Julius-Maximilians-Universität Würzburg"></a>
+    <nav class="programme-tabs" aria-label="Main navigation">
+      <a href="./" data-invitation-link>Programme</a>
+      <a href="agenda.html" data-invitation-link>Agenda</a>
+      <a href="about.html" data-invitation-link>About</a>
+    </nav>
     <a class="brand" href="./" aria-label="D3 programme home" data-invitation-link><img class="d3-logo" src="assets/d3.svg" width="241" height="48" alt="D3 · Data Driven Decisions"></a>
   </header>
   <main class="admin-main">
@@ -76,13 +81,35 @@
     </section>
     <section id="panel-email" hidden aria-labelledby="email-heading">
       <section class="mail-controls"><h2 id="email-heading">Email</h2>
-        <p class="admin-help">Review recipients and queue personalized emails here. Run the local sender when you are ready to enter your university password.</p>
+        <p class="admin-help">Choose an email, edit the draft, then preview and queue it. Send from your computer when you are ready.</p>
+        <details class="mail-outlines" open><summary>Email outlines</summary>
+          <ol>
+            <li><strong>Initial outreach</strong> · Once per person. Ask for Seminar 1 preferences by the deadline; invite optional responses for the other events.</li>
+            <li><strong>Availability invitation</strong> · Ask everyone in the selected event to choose their dates, with a deadline and personal link.</li>
+            <li><strong>Reminder</strong> · Follow up with invited people who have not finished responding.</li>
+            <li><strong>Talk proposal request</strong> · Encourage PhD participants to propose a talk, or reserve a later seminar with a provisional title.</li>
+            <li><strong>Date confirmation</strong> · Share the finalized schedule and location, with a calendar invitation attached.</li>
+          </ol>
+        </details>
         <form id="mail-preview-form" class="save-actions">
           <label for="mail-kind">Email type</label>
-          <select id="mail-kind"><option value="invite">1 · Confirm next seminar timings</option><option value="remind">2 · Remind unfinished respondents</option><option value="present">3 · PhD talk proposal nudge</option><option value="confirm">Final confirmations and calendar</option></select>
+          <select id="mail-kind" aria-describedby="mail-kind-help"><option value="initial">Initial outreach · one time</option><option value="invite">Availability invitation</option><option value="remind">Reminder · unfinished responses</option><option value="present">PhD talk proposal nudge</option><option value="confirm">Final confirmations and calendar</option></select>
           <label for="mail-event">Event</label><select id="mail-event"><option value="next">Next seminar</option></select>
-          <button class="secondary" type="submit">Preview recipients and emails</button>
         </form>
+        <p id="mail-kind-help" class="admin-help" hidden>Asks for Seminar 1 availability, with an optional invitation to respond for the other events. Sent once per person for this series.</p>
+        <section class="mail-draft" aria-labelledby="draft-heading">
+          <div class="dashboard-summary"><h3 id="draft-heading">Email draft</h3><button id="reload-draft" class="text-button" type="button">Reload saved draft</button></div>
+          <p id="draft-notice" class="notice" role="status" aria-live="polite" hidden></p>
+          <form id="mail-draft-form" hidden>
+            <label for="draft-subject">Subject</label><input id="draft-subject" type="text" maxlength="250" required>
+            <label for="draft-body">Message</label><textarea id="draft-body" rows="17" maxlength="20000" spellcheck="true" required></textarea>
+            <details class="draft-placeholders"><summary>Insert names, dates or links</summary><p class="admin-help">Place the cursor in the subject or message, then select a detail to insert. Each recipient gets their own values.</p><div id="draft-fields"></div></details>
+            <p id="draft-required" class="admin-help"></p>
+            <p class="admin-help">Test labels, the personal-link privacy note and confirmation calendar attachments are added automatically.</p>
+            <div class="save-actions"><button id="save-draft" class="primary" type="submit">Save draft</button><button id="default-draft" class="text-button" type="button">Use default wording</button></div>
+          </form>
+        </section>
+        <button id="preview-emails" class="secondary" type="submit" form="mail-preview-form" disabled>Preview recipients and emails</button>
         <p id="mail-notice" class="notice" role="status" hidden></p>
         <section id="mail-review" class="admin-review" aria-label="Email previews" hidden>
           <p id="mail-count"></p><div id="mail-messages"></div>
@@ -96,7 +123,8 @@
         <div id="mail-batches"></div>
       </section>
       <details class="mail-steps"><summary>Terminal commands</summary><p>These commands prepare email previews. Add <code>--send</code> to deliver after entering your JMU password.</p>
-        <dl><dt>Invite the group</dt><dd><code>python3 scripts/mailer.py invite</code></dd>
+        <dl><dt>First outreach to the group</dt><dd><code>python3 scripts/mailer.py initial</code></dd>
+        <dt>Invite the group to the next seminar</dt><dd><code>python3 scripts/mailer.py invite</code></dd>
         <dt>Remind only people with unfinished answers</dt><dd><code>python3 scripts/mailer.py remind</code></dd>
         <dt>Nudge students to add a talk or later placeholder</dt><dd><code>python3 scripts/mailer.py present</code></dd>
         <dt>After finalizing, send the selected event’s time and calendar file to everyone</dt><dd><code id="confirm-command"></code></dd></dl>

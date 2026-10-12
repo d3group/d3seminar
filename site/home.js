@@ -1,5 +1,5 @@
 import {apiFetch, loadConfig, serviceNotice} from './api.js';
-import {$, element, selectEvent, slotLabel, eventHref, durationLabel, preserveInvitationLinks, answeredCount, responseComplete, eventFinished, loadProgramme, nextEvent, nextSeminar, eventDisclosure, eventTimeline, programmeProgress, showSavedResponse, voteCounts, renderProgramme, participantRings, ringArc, calendarDay, renderPresentationNudge, onsiteDays} from './shared.js';
+import {$, element, selectEvent, slotLabel, eventHref, durationLabel, deadlineLabel, preserveInvitationLinks, answeredCount, responseComplete, eventFinished, loadProgramme, nextEvent, nextSeminar, eventDisclosure, eventTimeline, programmeProgress, showSavedResponse, voteCounts, renderProgramme, participantRings, ringArc, calendarDay, renderPresentationNudge, onsiteDays} from './shared.js';
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
 const requestedEvent = new URLSearchParams(location.search).get('event');
 preserveInvitationLinks(token);
@@ -326,6 +326,8 @@ function card(event, invited) {
   const month = new Intl.DateTimeFormat('en-GB', {timeZone:event.timezone, month:'long', year:'numeric'});
   const months = [...new Set(event.slots.flatMap(slot => [month.format(new Date(slot.start)), month.format(new Date(Date.parse(slot.end) - 1))]))].join(' · ');
   heading.append(title, element('p', months, 'event-summary-period'));
+  const deadline = element('p', '', 'event-reply-deadline'); deadline.hidden = true;
+  heading.append(deadline);
   const metadata = element('div', '', 'event-metadata');
   if (event.kind === 'onsite') metadata.append(element('span', event.semester, 'event-term'), element('span', durationLabel(event)));
   metadata.hidden = !metadata.childElementCount;
@@ -348,7 +350,14 @@ function card(event, invited) {
   const disclosure = eventDisclosure(heading, content, false, open => expandedEvents.set(event.id, open));
   node.append(disclosure);
   $('event-grid').append(node);
-  return {node, disclosure, status, link, metadata, calendar, summary, programme, agenda};
+  return {node, disclosure, status, link, metadata, calendar, summary, programme, agenda, deadline};
+}
+
+function renderDeadline(entry, poll, finalized) {
+  entry.deadline.hidden = Boolean(finalized);
+  if (finalized) return;
+  const time = element('time', deadlineLabel(poll)); time.dateTime = poll.deadline;
+  entry.deadline.replaceChildren('Please set your preferences by ', time, '.');
 }
 
 function markNextSeminar(cards, programme = cards) {
@@ -378,6 +387,7 @@ function renderCard(entry, invitation, onSave, openDate = null, saved = false) {
     entry.node.querySelector('.event-card-bottom').append(manage);
   }
   const finalEvent = invitation.state.final_event;
+  renderDeadline(entry, invitation.poll, finalEvent);
   if (invitation.state.final_event) {
     entry.summary.replaceChildren(element('p', slotLabel(finalEvent, invitation.poll.timezone, invitation.poll.daily_hours)));
     entry.summary.hidden = false;
@@ -400,6 +410,12 @@ function renderCard(entry, invitation, onSave, openDate = null, saved = false) {
 
 function renderProgress(programme) {
   renderPresentationNudge($('presentation-nudge'), programme, token);
+  const first = programme.find(entry => entry.event.id === 'seminar-1')?.invitation;
+  $('home-deadline').hidden = !first || Boolean(first.state.final_event);
+  if (first && !first.state.final_event) {
+    const time = element('time', deadlineLabel(first.poll)); time.dateTime = first.poll.deadline;
+    $('home-deadline').replaceChildren(' For the first seminar, please set your preferences by ', time, '.');
+  }
   $('journey-progress').textContent = programmeProgress(programme);
   $('programme-progress').hidden = false;
   const valid = programme.filter(entry => entry.invitation);
@@ -449,6 +465,7 @@ async function start() {
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || 'Public responses could not be loaded.');
         entry.event = {...entry.event, ...data.poll, slots:data.final_event ? [data.final_event] : data.poll.slots};
+        renderDeadline(entry, data.poll, data.final_event);
         renderCalendar(entry.calendar, entry.event, Boolean(data.final_event), null, null, data.totals);
         renderAgendaPreview(entry.agenda, entry.event, data.presentations);
       } catch {
@@ -474,7 +491,7 @@ async function start() {
   });
   const valid = programme.filter(entry => entry.invitation);
   if (!valid.length) throw new Error('Your invitation could not be loaded. Please reopen your email link or contact Aabhash.');
-  const name = element('strong', ''); name.append(element('em', valid[0].invitation.name));
+  const name = element('strong', ''); name.append(element('em', valid[0].invitation.name.trim().split(/\s+/)[0]));
   $('home-greeting').replaceChildren('Hello ', name, '. '); $('home-greeting').hidden = false;
   $('home-notice').hidden = true;
   renderProgress(programme);

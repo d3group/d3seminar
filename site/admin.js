@@ -1,5 +1,5 @@
 import {apiFetch, loadConfig, serviceNotice} from './api.js';
-import {$, element, slotLabel, dailyHoursLabel, preserveInvitationLinks} from './shared.js';
+import {$, element, slotLabel, dailyHoursLabel, preserveInvitationLinks, updateOrganizerNavigation} from './shared.js';
 const eventId = new URLSearchParams(location.search).get('event') || 'seminar-1';
 const secret = new URLSearchParams(location.hash.slice(1)).get('key');
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
@@ -11,6 +11,8 @@ if (token) {
 }
 let dashboard, schedulePreview, mailPreview, roster, editingUser, editingVersion, programmeConfig;
 let userBusy = false;
+let mailDraft, draftRequest = 0, draftSaving = false, draftTarget = 'draft-body';
+const draftBuffers = new Map();
 const names = {available:'Available', unavailable:'Unavailable'};
 function notice(text, error = false) {
   $('admin-notice').textContent = text; $('admin-notice').hidden = !text; $('admin-notice').classList.toggle('error', error);
@@ -20,7 +22,10 @@ function when(slot) { return slotLabel(slot, dashboard.poll.timezone, dashboard.
 async function api(action, data = {}) {
   const response = await apiFetch('admin', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action, secret, token, event_id:eventId, ...data})});
   const result = await response.json();
-  if (response.status === 403) { $('dashboard').hidden = true; $('admin-panels').hidden = true; notice(result.error, true); }
+  if (response.status === 403) {
+    updateOrganizerNavigation(token);
+    $('dashboard').hidden = true; $('admin-panels').hidden = true; notice(result.error, true);
+  }
   if (!response.ok || !result.ok) throw new Error(result.error || 'The request failed.');
   return result;
 }
@@ -30,6 +35,7 @@ async function choose(slot, button) {
     await api('finalize', {slot_id:slot.id, snapshot:dashboard.snapshot});
     await refresh();
     $('mail-kind').value = 'confirm';
+    updateMailKind();
     notice('Time finalized. Send the calendar invitation with the local email service. No email has been sent yet.');
   } catch (error) { notice(error.message, true); button.disabled = false; }
 }
@@ -151,17 +157,115 @@ $('programme-form').addEventListener('submit', async event => {
   } catch (error) { notice(error.message, true); }
   finally { button.disabled = false; }
 });
-$('mail-kind').addEventListener('change', () => {
-  $('mail-event').value = $('mail-kind').value === 'confirm' ? eventId : 'next';
+function updateMailKind() {
+  const kind = $('mail-kind').value;
+  $('mail-event').disabled = kind === 'initial';
+  $('mail-event').value = kind === 'initial' ? 'seminar-1' : kind === 'confirm' ? eventId : 'next';
+  $('mail-kind-help').hidden = kind !== 'initial';
   clearMailPreview(); mailNotice('');
-});
-$('mail-event').addEventListener('change', () => { clearMailPreview(); mailNotice(''); });
-$('mail-preview-form').addEventListener('submit', async event => {
-  event.preventDefault(); const button = event.submitter; button.disabled = true; clearMailPreview();
-  const kind = $('mail-kind').value, mailEvent = $('mail-event').value;
+  if (!$('panel-email').hidden) loadMailDraft();
+}
+$('mail-kind').addEventListener('change', updateMailKind);
+$('mail-event').addEventListener('change', () => { mailNotice(''); loadMailDraft(); });
+
+function draftChanged(draft = mailDraft) {
+  return draft && (draft.subject !== draft.saved.subject || draft.body !== draft.saved.body);
+}
+function draftNotice(message, error = false) {
+  $('draft-notice').textContent = message; $('draft-notice').hidden = !message; $('draft-notice').classList.toggle('error', error);
+}
+function updateDraftButtons() {
+  $('save-draft').disabled = !mailDraft || !draftChanged() || draftSaving;
+  $('preview-emails').disabled = !mailDraft || draftChanged() || draftSaving;
+}
+function renderDraft(entry) {
+  mailDraft = entry;
+  $('draft-heading').textContent = `Draft · ${entry.saved.event_name}`;
+  $('draft-subject').value = entry.subject; $('draft-body').value = entry.body;
+  $('draft-required').textContent = 'Keep these details in the message: ' + entry.saved.required_fields.map(name => '{' + name + '}').join(', ') + '.';
+  $('draft-fields').replaceChildren();
+  for (const [name, label] of Object.entries(entry.saved.fields)) {
+    const button = element('button', label); button.type = 'button'; button.title = '{' + name + '}';
+    button.addEventListener('click', () => {
+      if (draftTarget === 'draft-subject' && !mailDraft.saved.subject_fields.includes(name)) {
+        draftNotice('Insert this detail in the message, rather than the subject.', true); return;
+      }
+      const input = $(draftTarget);
+      input.setRangeText('{' + name + '}', input.selectionStart, input.selectionEnd, 'end');
+      input.focus(); editDraft();
+    });
+    $('draft-fields').append(button);
+  }
+  $('mail-draft-form').hidden = false;
+  updateDraftButtons();
+  draftNotice(draftChanged() ? 'Unsaved changes. Save the draft before previewing recipients.'
+    : entry.saved.updated_at ? 'Saved draft. Preview recipients when you are ready.' : 'Default wording. Edit it here, or preview it as it is.');
+}
+function editDraft() {
+  if (!mailDraft) return;
+  mailDraft.subject = $('draft-subject').value; mailDraft.body = $('draft-body').value;
+  clearMailPreview(); updateDraftButtons();
+  draftNotice(draftChanged() ? 'Unsaved changes. Save the draft before previewing recipients.' : 'Saved wording restored.');
+}
+for (const id of ['draft-subject', 'draft-body']) {
+  $(id).addEventListener('focus', () => { draftTarget = id; });
+  $(id).addEventListener('input', editDraft);
+}
+async function loadMailDraft(reload = false) {
+  if (draftSaving) return;
+  const kind = $('mail-kind').value, mailEvent = $('mail-event').value, key = kind + ':' + mailEvent;
+  const pending = ++draftRequest, buffer = draftBuffers.get(key);
+  clearMailPreview(); mailDraft = null; updateDraftButtons(); $('mail-draft-form').hidden = true;
+  if (!reload && draftChanged(buffer)) { renderDraft(buffer); return; }
+  draftNotice('Loading draft…');
   try {
-    const preview = await api('email_preview', {kind, mail_event:mailEvent});
-    if (kind !== $('mail-kind').value || mailEvent !== $('mail-event').value) return;
+    const saved = await api('email_draft', {kind, mail_event:mailEvent});
+    if (pending !== draftRequest) return;
+    const entry = {saved, subject:saved.subject, body:saved.body};
+    draftBuffers.set(key, entry); renderDraft(entry);
+  } catch (error) { if (pending === draftRequest) draftNotice(error.message, true); }
+}
+$('reload-draft').addEventListener('click', () => {
+  if (draftChanged() && !confirm('Discard unsaved changes and reload the saved draft?')) return;
+  loadMailDraft(true);
+});
+$('default-draft').addEventListener('click', () => {
+  if (!mailDraft) return;
+  $('draft-subject').value = mailDraft.saved.default.subject; $('draft-body').value = mailDraft.saved.default.body;
+  editDraft(); draftNotice('Default wording loaded. Save the draft to use it.');
+});
+$('mail-draft-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!mailDraft || draftSaving) return;
+  const entry = mailDraft;
+  draftSaving = true; updateDraftButtons();
+  $('mail-kind').disabled = true; $('mail-event').disabled = true; $('reload-draft').disabled = true;
+  $('mail-draft-form').querySelectorAll('input, textarea, button').forEach(control => { control.disabled = true; });
+  try {
+    entry.saved = await api('save_email_draft', {kind:entry.saved.kind, mail_event:entry.saved.event_id,
+      subject:entry.subject, body:entry.body, version:entry.saved.version});
+    clearMailPreview();
+    draftNotice('Draft saved. Preview recipients and emails, then queue them when ready. Nothing has been sent.');
+    await refreshMail();
+  } catch (error) { draftNotice(error.message, true); }
+  finally {
+    draftSaving = false;
+    $('mail-kind').disabled = false; $('mail-event').disabled = $('mail-kind').value === 'initial'; $('reload-draft').disabled = false;
+    $('mail-draft-form').querySelectorAll('input, textarea, button').forEach(control => { control.disabled = false; });
+    updateDraftButtons();
+  }
+});
+window.addEventListener('beforeunload', event => {
+  if ([...draftBuffers.values()].some(draft => draftChanged(draft))) { event.preventDefault(); event.returnValue = ''; }
+});
+$('mail-preview-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!mailDraft || draftChanged() || draftSaving) return;
+  const button = $('preview-emails'); button.disabled = true; clearMailPreview();
+  const entry = mailDraft, {kind, event_id:mailEvent, version} = entry.saved;
+  try {
+    const preview = await api('email_preview', {kind, mail_event:mailEvent, draft_version:version});
+    if (entry !== mailDraft || version !== mailDraft.saved.version || draftChanged()) return;
     mailPreview = preview;
     $('mail-count').textContent = `${preview.event_name}: ${preview.messages.length} email${preview.messages.length === 1 ? '' : 's'} from ${preview.sender}`;
     $('mail-messages').replaceChildren();
@@ -174,7 +278,7 @@ $('mail-preview-form').addEventListener('submit', async event => {
     $('queue-mail').disabled = !preview.messages.length;
     mailNotice(preview.messages.length ? 'Personal links are hidden in this preview. Queue these emails, then send with the local email service.' : 'No eligible messages for this email type. Previous deliveries and current responses have been checked.');
   } catch (error) { mailNotice(error.message, true); }
-  finally { button.disabled = false; }
+  finally { updateDraftButtons(); }
 });
 $('queue-mail').addEventListener('click', async () => {
   if (!mailPreview) return;
@@ -185,7 +289,7 @@ $('queue-mail').addEventListener('click', async () => {
     await refreshMail(); mailNotice('Emails queued. Nothing has been sent. Run the local sender when you are ready.');
   } catch (error) { mailNotice(error.message, true); $('queue-mail').disabled = false; }
 });
-const mailKinds = {invite:'Timing invitation', remind:'Availability reminder', present:'Talk proposal nudge', confirm:'Final confirmation'};
+const mailKinds = {initial:'Initial outreach', invite:'Timing invitation', remind:'Availability reminder', present:'Talk proposal nudge', confirm:'Final confirmation'};
 const deliveryNames = {ready:'Ready for local sender', sent:'Sent', attempted:'Attempted · check delivery', skipped:'No longer eligible', review:'Changed · preview again', cancelled:'Cancelled'};
 async function refreshMail() {
   const result = await api('mail_batches');
@@ -248,6 +352,7 @@ async function saveUser(user) {
     const saved = await api('save_user', {user, version:editingVersion});
     $('user-form').hidden = true; clearMailPreview();
     if (!saved.is_organizer) {
+      updateOrganizerNavigation(token);
       $('admin-panels').hidden = true; notice('User saved. Your organizer access has been removed.'); return;
     }
     await refreshUsers();
@@ -280,7 +385,7 @@ document.querySelectorAll('[data-panel]').forEach(button => button.addEventListe
   });
   try {
     if (panel === 'users') await refreshUsers();
-    else if (panel === 'email') await refreshMail();
+    else if (panel === 'email') { await refreshMail(); await loadMailDraft(); }
     else await refresh();
   } catch (error) { notice(error.message, true); }
 }));
@@ -309,6 +414,8 @@ async function start() {
     checkbox.type = 'checkbox'; checkbox.value = event.id; label.append(checkbox, document.createTextNode(event.name)); $('user-events').append(label);
   }
   $('confirm-command').textContent = `python3 scripts/mailer.py confirm --event ${eventId}`;
+  updateMailKind();
   await refresh();
+  updateOrganizerNavigation(token, eventId);
   $('admin-panels').hidden = false;
 }

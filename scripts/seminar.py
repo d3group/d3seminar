@@ -18,6 +18,7 @@ from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo
 
 from api_client import post_json
+import mail_templates
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE = Path(os.environ.get('D3_DATA_DIR', ROOT / '.private'))
@@ -415,26 +416,15 @@ def invitation_url(config, invite):
     return config['site_url'] + 'event.html?' + urlencode(dict(event=config.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(token=invite['token']))
 
 
-def message_content(config, local, invite, kind, state=None, later=None):
+def message_content(config, local, invite, kind, state=None, later=None, draft=None):
     poll = invite['poll']
     state = state or {}
-    wording = {
-        'invite': ('Find a time for our seminar', 'Please mark your availability for each option. We are looking for one time when everyone can attend.'),
-        'remind': ('Reminder: your seminar availability', 'Please finish marking your availability so we can find a time for everyone.'),
-        'confirm': ('Our seminar time is confirmed', 'Everyone has confirmed their availability. Our seminar will take place at the time below.'),
-        'present': ('Bring your research to our next seminar', 'Please add a talk for our next seminar. Work in progress, an early result, or a question you would like feedback on is welcome.'),
-    }
-    if kind not in wording:
-        raise ValueError('Choose invitations, reminders, presentation nudges or final confirmations.')
-    subject, introduction = wording[kind]
-    series = config.get('name', poll['title']) + (' · ' + config['semester'] if config.get('semester') else '')
-    if config.get('kind') == 'onsite':
-        subject = subject.replace('seminar', 'onsite meeting')
-        introduction = introduction.replace('seminar', 'onsite meeting')
-        if kind != 'confirm':
-            hours = poll.get('daily_hours')
-            timing = f', {daily_hours_label(hours)}' if hours else ''
-            introduction += f' Each option covers {poll["duration_days"]} consecutive dates{timing}. Please respond for the whole meeting.'
+    draft = draft if draft is not None else mail_templates.default_template(kind, config)
+    onsite_note = ''
+    if config.get('kind') == 'onsite' and kind != 'confirm':
+        hours = poll.get('daily_hours')
+        timing = f', {daily_hours_label(hours)}' if hours else ''
+        onsite_note = f' Each option covers {poll["duration_days"]} consecutive dates{timing}. Please respond for the whole meeting.'
     if kind == 'confirm' or kind == 'present' and state.get('final_event'):
         event = state.get('final_event')
         if not event:
@@ -445,36 +435,34 @@ def message_content(config, local, invite, kind, state=None, later=None):
     else:
         details = '\n'.join(when(slot, poll['timezone'], poll.get('daily_hours')) for slot in poll['slots'])
     deadline = datetime.fromisoformat(poll['deadline']).astimezone(ZoneInfo(poll['timezone']))
-    due = '' if kind in {'confirm', 'present'} else f'Please respond by {deadline:%A, %d %B, %H:%M} ({poll["timezone"]}).\n\n'
     test_note = 'This is an MVP test sent only to you. All dates below are test options.\n\n' if config['test_mode'] else ''
     presentation_url = config['site_url'] + 'agenda.html?' + urlencode(dict(present=config.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(token=invite['token']))
-    presentation_note = ''
+    programme_url = config['site_url'] + '#' + urlencode(dict(token=invite['token']))
+    links = {invitation_url(config, invite):'Open your personal invitation', programme_url:'View all events', presentation_url:'Add your presentation'}
+    later_options = ''
     if kind == 'present':
         if invite.get('role') != 'student':
             raise ValueError('Presentation nudges are for students only.')
-        presentation_note = ('Start with a title; your abstract, explainer and slides can follow later.\nAdd your presentation:\n' + presentation_url + '\n\n')
         if later:
-            presentation_note += 'Not ready for the next seminar? Reserve a later seminar with a provisional title. You can develop it into a full talk later.\n'
+            later_options = 'Not ready for the next seminar? Reserve a later seminar with a provisional title. You can develop it into a full talk later.\n'
             for event in later:
                 link = config['site_url'] + 'agenda.html?' + urlencode(dict(present=event['id'], placeholder='1')) + '#' + urlencode(dict(token=invite['token']))
-                presentation_note += event['name'] + ': ' + link + '\n'
-            presentation_note += '\n'
+                later_options += event['name'] + ': ' + link + '\n'
+                links[link] = 'Reserve ' + event['name']
         else:
-            presentation_note += 'If you cannot present at this seminar, please contact me to plan a contribution.\n\n'
-        presentation_note += 'Plan to contribute at least once across the three seminars and at the onsite meeting.\n\n'
-    body = (f'Hello {invite["name"]},\n\n{test_note}{introduction}\n\n{series}\n{details}\n'
-            f'{state["final_event"]["location"] if kind == "confirm" else poll["location"]}\n\n{due}'
-            + (presentation_note if kind == 'present' else f'Open your personal invitation:\n{invitation_url(config, invite)}\n\n')
-            + 'Please keep your personal links private; anyone with them can update your responses and presentations.\n\n'
-            f'Best,\n{local["sender_name"]}\n\nPlease send any comments or suggestions to {local["sender_email"]}.\n')
-    subject = ('[TEST] ' if config['test_mode'] else '') + subject + ' | ' + series
-    safe_body = html.escape(body).replace(html.escape(invitation_url(config, invite)),
-        '<a href="' + html.escape(invitation_url(config, invite), quote=True) + '">Open your personal invitation</a>')
-    if presentation_note:
-        safe_body = safe_body.replace(html.escape(presentation_url), '<a href="' + html.escape(presentation_url, quote=True) + '">Add your presentation</a>')
-        for event in later or []:
-            link = config['site_url'] + 'agenda.html?' + urlencode(dict(present=event['id'], placeholder='1')) + '#' + urlencode(dict(token=invite['token']))
-            safe_body = safe_body.replace(html.escape(link), '<a href="' + html.escape(link, quote=True) + '">Reserve ' + html.escape(event['name']) + '</a>')
+            later_options = 'If you cannot present at this seminar, please contact me to plan a contribution.'
+    values = dict(name=invite['name'], first_name=invite['name'].strip().split()[0], event_name=config.get('name', poll['title']),
+                  semester=config.get('semester', ''), schedule=details,
+                  location=state['final_event']['location'] if kind == 'confirm' else poll['location'],
+                  deadline=f'{deadline:%A, %d %B %Y at %H:%M} ({poll["timezone"]})', onsite_note=onsite_note,
+                  invitation_link=invitation_url(config, invite), programme_link=programme_url, presentation_link=presentation_url,
+                  later_options=later_options.strip(), sender_name=local['sender_name'], sender_email=local['sender_email'])
+    subject, body = mail_templates.render(draft, kind, values)
+    subject = ('[TEST] ' if config['test_mode'] else '') + subject
+    body = test_note + body.strip() + '\n\nPlease keep your personal links private; anyone with them can update your responses and presentations.\n'
+    safe_body = html.escape(body)
+    for link, label in links.items():
+        safe_body = safe_body.replace(html.escape(link), '<a href="' + html.escape(link, quote=True) + '">' + html.escape(label) + '</a>')
     paragraphs = ''.join('<p style="margin:0 0 18px">' + paragraph.replace('\n', '<br>') + '</p>'
                          for paragraph in safe_body.strip().split('\n\n'))
     html_body = ('<html><body><div style="font:15px/1.7 Arial,sans-serif;max-width:600px;color:#152d35">'
@@ -486,13 +474,14 @@ def message_content(config, local, invite, kind, state=None, later=None):
 
 
 def eligible(invite, response, kind, state=None):
-    if kind not in {'invite', 'remind', 'confirm', 'present'}:
+    if kind not in {'initial', 'invite', 'remind', 'confirm', 'present'}:
         return False
     deliveries = invite.get('deliveries', {})
     state = state or {}
     answers = {key:value for key,value in (response or {}).get('answers', {}).items() if value in {'available', 'unavailable'}}
     revision = invite['revision']
-    key = kind + ':' + revision
+    initial_key = 'initial:' + invite['poll']['campaign_id']
+    key = initial_key if kind == 'initial' else kind + ':' + revision
     if kind == 'confirm':
         if not state.get('final_event'):
             return False
@@ -505,7 +494,7 @@ def eligible(invite, response, kind, state=None):
             return False
         if kind == 'remind' and all(answers.get(slot['id']) for slot in invite['poll']['slots']):
             return False
-        if kind == 'remind' and deliveries.get('invite:' + revision, {}).get('status') != 'sent':
+        if kind == 'remind' and not any(deliveries.get(key, {}).get('status') == 'sent' for key in ('invite:' + revision, initial_key)):
             return False
     return key if key not in deliveries else False
 

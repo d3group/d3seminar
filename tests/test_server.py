@@ -226,6 +226,7 @@ class StoreTests(unittest.TestCase):
             connection.connection().exec_driver_sql('ALTER TABLE users DROP COLUMN is_organizer')
             connection.connection().exec_driver_sql('ALTER TABLE users DROP COLUMN is_archived')
             connection.connection().exec_driver_sql('DROP TABLE mail_batches')
+            connection.connection().exec_driver_sql('DROP TABLE mail_drafts')
             connection.connection().exec_driver_sql("UPDATE alembic_version SET version_num='0001_initial'")
         self.store = Store(self.store.database)
         current = self.store.invitation(TOKEN)
@@ -239,7 +240,7 @@ class StoreTests(unittest.TestCase):
         Store(self.store.database)
         with self.store.session(write=True) as connection:
             self.assertEqual(connection.connection().exec_driver_sql('SELECT COUNT(*) FROM history').fetchone()[0], before)
-            self.assertEqual(connection.connection().exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0004_admin_panel')
+            self.assertEqual(connection.connection().exec_driver_sql('SELECT version_num FROM alembic_version').scalar(), '0005_mail_drafts')
         with self.assertRaises(ValueError):
             self.store.respond(dict(RESPONSE, **{'answer:' + other_slot:'if_needed'}))
 

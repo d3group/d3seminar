@@ -5,8 +5,34 @@ import re
 import secrets
 
 from sqlalchemy import select
-from models import MailBatch
+from models import MailBatch, MailDraft
 import seminar
+import mail_templates
+
+
+def draft(organizer, event_id, kind):
+    event_id = organizer.mail_event_id(event_id, kind)
+    config = seminar.event_config(organizer.config, event_id)
+    default = mail_templates.default_template(kind, config)
+    with organizer.stores['seminar-1'].session() as session:
+        saved = session.get(MailDraft, event_id + ':' + kind)
+        data = saved.data if saved else dict(default, updated_at=None)
+    version = seminar.event_revision(dict(event_id=event_id, kind=kind, **data))
+    return dict(event_id=event_id, event_name=config.get('name', config['title']), kind=kind, **data, version=version,
+                default=default, fields=mail_templates.FIELDS, subject_fields=sorted(mail_templates.SUBJECT_FIELDS),
+                required_fields=sorted(mail_templates.required_fields(kind)))
+
+
+def save_draft(organizer, event_id, kind, content, version):
+    mail_templates.validate(content, kind)
+    with organizer.lock():
+        current = draft(organizer, event_id, kind)
+        if current['version'] != version:
+            raise ValueError('This draft changed in another window. Reload it before saving.')
+        data = dict(content, updated_at=seminar.now())
+        with organizer.stores['seminar-1'].session(write=True) as session:
+            session.merge(MailDraft(id=current['event_id'] + ':' + kind, data=data))
+        return draft(organizer, current['event_id'], kind)
 
 
 def review(plan):
@@ -18,8 +44,10 @@ def review(plan):
                 messages=messages, version=version)
 
 
-def preview(organizer, event_id, kind):
+def preview(organizer, event_id, kind, draft_version=None):
     with organizer.lock():
+        if draft_version is not None and draft(organizer, event_id, kind)['version'] != draft_version:
+            raise ValueError('This draft changed in another window. Reload it before previewing.')
         return review(organizer.mail_queue(event_id, kind))
 
 

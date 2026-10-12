@@ -1,5 +1,5 @@
 import {apiFetch, loadConfig, apiUrl, serviceNotice} from './api.js';
-import {$, selectEvent, slotLabel, durationLabel, dailyHoursLabel, preserveInvitationLinks, eventHref, answeredCount, eventFinished, nextEvent, loadProgramme, programmeProgress, showSavedResponse, renderProgramme} from './shared.js';
+import {$, selectEvent, slotLabel, durationLabel, deadlineLabel, dailyHoursLabel, preserveInvitationLinks, eventHref, answeredCount, eventFinished, nextEvent, loadProgramme, programmeProgress, showSavedResponse, renderProgramme} from './shared.js';
 preserveInvitationLinks(new URLSearchParams(location.hash.slice(1)).get('token'));
 let config, poll, token, programme = [], saving = false;
 const eventId = new URLSearchParams(location.search).get('event') || 'seminar-1';
@@ -92,7 +92,7 @@ async function saveResponse(event) {
 
 function renderPoll(answers = {}) {
   $('poll-meta').textContent = `${durationLabel(poll)} · All times in ${poll.timezone}`;
-  $('poll-deadline').textContent = `Please reply by ${date(poll.deadline)}, ${time(poll.deadline)}.`;
+  $('poll-deadline').textContent = `Please set your preferences by ${deadlineLabel(poll)}.`;
   $('poll-options').replaceChildren();
   for (const slot of poll.slots) {
     const fieldset = document.createElement('fieldset');

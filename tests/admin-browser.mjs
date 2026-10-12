@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 
 const {chromium} = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = fileURLToPath(new URL('../', import.meta.url));
-const fixture = spawn('python3', ['tests/browser_fixture.py', '--organizer', '--admin'], {cwd:root, stdio:['ignore', 'pipe', 'inherit']});
+const fixture = spawn('python3', ['tests/browser_fixture.py', '--organizer', '--admin', '--pages'], {cwd:root, stdio:['ignore', 'pipe', 'inherit']});
 let browser;
 try {
   const details = await new Promise((resolve, reject) => {
@@ -21,7 +21,15 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.setDefaultTimeout(10000);
   const url = details.base + 'admin.html#token=' + 'T'.repeat(43);
-  await page.goto(url);
+  for (const path of ['', 'agenda.html', 'event.html?event=seminar-1', 'about.html']) {
+    await page.goto(details.base + path + '#token=' + 'T'.repeat(43));
+    const admin = page.getByRole('navigation', {name:'Main navigation'}).getByRole('link', {name:'Admin', exact:true});
+    await admin.waitFor();
+    assert.equal(await admin.getAttribute('href'), details.base + 'admin.html?event=seminar-1#token=' + 'T'.repeat(43));
+  }
+  await page.getByRole('link', {name:'Admin', exact:true}).click();
+  await page.locator('.programme-tabs a[data-organizer-link][aria-current="page"]').waitFor();
+  assert.equal(await page.getByRole('navigation', {name:'Main navigation'}).getByRole('link').count(), 4);
   await page.getByRole('button', {name:'Users', exact:true}).click();
   await page.locator('#users-count').filter({hasText:'1 users'}).waitFor();
   await page.getByRole('button', {name:'Edit Browser Test', exact:true}).click();
@@ -57,9 +65,43 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.screenshot({path:root+'test-results/admin-users-mobile.png', fullPage:true});
   await page.getByRole('button', {name:'Email', exact:true}).click();
+  assert.equal(await page.locator('#mail-kind').inputValue(), 'initial');
+  assert.equal(await page.locator('#mail-event').inputValue(), 'seminar-1');
+  assert.equal(await page.locator('#mail-event').isDisabled(), true);
+  await page.locator('#mail-kind').selectOption('remind');
+  assert.equal(await page.locator('#mail-event').isDisabled(), false);
+  await page.locator('#mail-kind').selectOption('initial');
+  await page.locator('#mail-draft-form').waitFor();
+  assert.equal(await page.locator('.mail-outlines li').count(), 5);
+  const defaultBody = await page.getByLabel('Message', {exact:true}).inputValue();
+  await page.getByLabel('Subject', {exact:true}).fill('Planning with {first_name}');
+  await page.getByLabel('Message', {exact:true}).fill(defaultBody + '\nPlease bring your questions.');
+  assert.equal(await page.locator('#preview-emails').isDisabled(), true);
+  await page.locator('#mail-kind').selectOption('confirm');
+  await page.getByLabel('Message', {exact:true}).waitFor();
+  await page.locator('#draft-notice').filter({hasText:'Default wording'}).waitFor();
+  assert.match(await page.getByLabel('Message', {exact:true}).inputValue(), /\{schedule\}/);
+  await page.locator('#mail-kind').selectOption('initial');
+  await page.locator('#draft-notice').filter({hasText:'Unsaved changes'}).waitFor();
+  assert.equal(await page.getByLabel('Subject', {exact:true}).inputValue(), 'Planning with {first_name}');
+  await page.getByRole('button', {name:'Save draft', exact:true}).click();
+  await page.locator('#draft-notice').filter({hasText:'Draft saved.'}).waitFor();
+  await page.reload();
+  await page.getByRole('button', {name:'Email', exact:true}).click();
+  await page.locator('#mail-draft-form').waitFor();
+  assert.equal(await page.getByLabel('Subject', {exact:true}).inputValue(), 'Planning with {first_name}');
+  assert.equal(await page.getByLabel('Message', {exact:true}).inputValue(), defaultBody + '\nPlease bring your questions.');
+  await page.screenshot({path:root+'test-results/email-draft-mobile.png', fullPage:true});
+  await page.setViewportSize({width:1440, height:1000});
+  await page.screenshot({path:root+'test-results/email-draft-desktop.png', fullPage:true});
+  await page.setViewportSize({width:390, height:844});
   await page.getByRole('button', {name:'Preview recipients and emails', exact:true}).click();
   await page.locator('#mail-review').waitFor();
   assert.equal((await page.locator('#mail-messages').textContent()).includes('T'.repeat(43)), false);
+  assert.match(await page.locator('#mail-messages').textContent(), /first D3 seminar/);
+  assert.match(await page.locator('#mail-messages').textContent(), /other seminars and the onsite/);
+  assert.match(await page.locator('#mail-messages').textContent(), /Planning with Browser/);
+  assert.match(await page.locator('#mail-messages').textContent(), /Please bring your questions\./);
   await page.getByRole('button', {name:'Queue these emails', exact:true}).click();
   await page.locator('#mail-notice').filter({hasText:'Emails queued.'}).waitFor();
   await page.locator('#mail-batches summary').click();
@@ -72,8 +114,21 @@ try {
   await visitor.goto(details.base + 'admin.html');
   await visitor.locator('#admin-notice.error').waitFor();
   assert.equal(await visitor.locator('#admin-panels').isVisible(), false);
+  assert.equal(await visitor.getByRole('link', {name:'Admin', exact:true}).count(), 0);
+  await visitor.goto(details.base);
+  await visitor.locator('.event-card .event-calendar').first().waitFor();
+  assert.equal(await visitor.getByRole('link', {name:'Admin', exact:true}).count(), 0);
+  await visitor.goto(details.base + 'about.html#token=' + 'X'.repeat(43));
+  await visitor.waitForLoadState('networkidle');
+  assert.equal(await visitor.getByRole('link', {name:'Admin', exact:true}).count(), 0);
+  await page.goto(url);
+  await page.locator('#admin-panels').waitFor();
+  await page.route('**/api/admin', route => route.fulfill({status:403, json:{ok:false, error:'Organizer access required.'}}));
+  await page.getByRole('button', {name:'Refresh responses', exact:true}).click();
+  await page.locator('#admin-notice.error').waitFor();
+  assert.equal(await page.getByRole('link', {name:'Admin', exact:true}).count(), 0);
   assert.deepEqual(errors, []);
-  console.log('Admin panel: user edits, multiple organizers, last-organizer protection, removal/restoration, private previews, queue/cancellation and mobile layouts passed.');
+  console.log('Admin panel: organizer-only navigation, user edits, multiple organizers, last-organizer protection, removal/restoration, editable drafts, initial outreach, private previews, queue/cancellation and mobile layouts passed.');
 } finally {
   if (browser) await browser.close();
   fixture.kill('SIGTERM');

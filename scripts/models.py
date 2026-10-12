@@ -74,3 +74,9 @@ class MailBatch(Base):
     __tablename__ = 'mail_batches'
     id = mapped_column(Text, primary_key=True)
     data = mapped_column(JSONText, nullable=False)
+
+
+class MailDraft(Base):
+    __tablename__ = 'mail_drafts'
+    id = mapped_column(Text, primary_key=True)
+    data = mapped_column(JSONText, nullable=False)

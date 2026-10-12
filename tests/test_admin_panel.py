@@ -57,7 +57,7 @@ class AdminPanelTests(unittest.TestCase):
         return self.api('save_user', user=dict(payload, **changes), version=self.roster()['version'])
 
     def test_users_permissions_handover_and_safe_removal(self):
-        for action in ('users', 'save_user', 'email_preview', 'queue_mail', 'mail_batches', 'cancel_mail'):
+        for action in ('users', 'save_user', 'email_preview', 'email_draft', 'save_email_draft', 'queue_mail', 'mail_batches', 'cancel_mail'):
             self.assertEqual(self.api(action, token='B'*43).status_code, 403)
         original = self.roster()['users'][0]
         self.assertNotIn('token', original)
@@ -134,6 +134,10 @@ class AdminPanelTests(unittest.TestCase):
         self.assertEqual(self.roster()['users'], before['users'])
 
     def test_email_preview_queue_and_local_delivery(self):
+        draft = self.api('email_draft', kind='invite', mail_event='next').json
+        self.assertTrue(draft.get('ok'), draft)
+        self.assertEqual(self.api('save_email_draft', kind='invite', mail_event=draft['event_id'], version=draft['version'],
+                                 subject='Planning together: {event_name}', body=draft['body'] + '\nYour ideas are welcome.').status_code, 200)
         preview = self.api('email_preview', kind='invite', mail_event='next').json
         self.assertTrue(preview.get('ok'), preview)
         self.assertNotIn('A'*43, str(preview))
@@ -153,10 +157,63 @@ class AdminPanelTests(unittest.TestCase):
             mailer.run(self.settings, self.root/'mail', 'queued', send=True)
             client = smtp.return_value.__enter__.return_value
             self.assertEqual(client.send_message.call_count, 1)
+            sent = client.send_message.call_args.args[0]
+            self.assertEqual(sent['Subject'], 'Planning together: Seminar 1')
+            self.assertIn('Your ideas are welcome.', sent.get_body(preferencelist=('plain',)).get_content())
             mailer.run(self.settings, self.root/'mail', 'queued', send=True)
             self.assertEqual(client.send_message.call_count, 1)
         batch = self.api('mail_batches').json['batches'][0]
         self.assertEqual(batch['counts']['sent'], 1)
+
+    def test_email_drafts_are_private_scoped_versioned_and_validated(self):
+        for kind in ('initial', 'invite', 'remind', 'present', 'confirm'):
+            draft = self.api('email_draft', kind=kind, mail_event='next').json
+            self.assertTrue(draft.get('ok'), draft)
+            self.assertIn('{name}', draft['body'])
+            self.assertNotIn('A'*43, str(draft))
+        draft = self.api('email_draft', kind='invite', mail_event='seminar-1').json
+        before_other = self.api('email_draft', kind='invite', mail_event='seminar-2').json
+        edited = dict(kind='invite', mail_event='seminar-1', version=draft['version'],
+                      subject='Hello {first_name}: {event_name}', body=draft['body'] + '\nA new idea: <script>alert(1)</script>')
+        result = self.api('save_email_draft', **edited)
+        self.assertEqual(result.status_code, 200, result.json)
+        saved = self.api('email_draft', kind='invite', mail_event='seminar-1').json
+        self.assertEqual(saved['body'], edited['body'])
+        self.assertNotEqual(saved['version'], draft['version'])
+        self.assertEqual(self.api('email_preview', kind='invite', mail_event='seminar-1', draft_version=draft['version']).status_code, 400)
+        self.assertEqual(self.api('save_email_draft', **edited).status_code, 400)
+        self.assertEqual(self.api('email_draft', kind='invite', mail_event='seminar-2').json, before_other)
+        mail = self.service.organizer.preview_mail('seminar-1', 'invite')['messages'][0]
+        self.assertEqual(mail['subject'], 'Hello Ada: Seminar 1')
+        self.assertIn('Hello Ada Example,', mail['body'])
+        self.assertNotIn('<script>', mail['html'])
+        self.assertIn('&lt;script&gt;', mail['html'])
+        for changes in [dict(subject='Bad\r\nBcc: outsider@example.org'), dict(body='{unknown}'),
+                        dict(body='{name.__class__} {deadline} {invitation_link}'), dict(body='No invitation link'),
+                        dict(subject='{schedule}'), dict(body=saved['body']+'\n#token='+'A'*43), dict(body='x'*20001)]:
+            invalid = dict(edited, version=saved['version'], **changes)
+            self.assertEqual(self.api('save_email_draft', **invalid).status_code, 400)
+        self.assertEqual(self.api('email_draft', kind='invite', mail_event='seminar-1').json, saved)
+
+    def test_editing_a_queued_draft_requires_a_new_preview_before_delivery(self):
+        preview = self.api('email_preview', kind='initial', mail_event='next').json
+        batch = self.api('queue_mail', kind='initial', mail_event='next', version=preview['version']).json['batch_id']
+        plan = self.api('preview_queued', secret='operator-test').json['plans'][0]
+        row = plan['messages'][0]
+        draft = self.api('email_draft', kind='initial', mail_event='next').json
+        self.assertEqual(self.api('save_email_draft', kind='initial', mail_event='seminar-1', version=draft['version'],
+                                 subject=draft['subject'], body=draft['body']+'\nPlease join the discussion.').status_code, 200)
+        self.assertEqual(self.api('preview_queued', secret='operator-test').json['plans'], [])
+        self.assertEqual(self.api('mail_batches').json['batches'][0]['counts']['review'], 1)
+        stale = self.api('claim_mail', secret='operator-test', kind='initial', participant_id=row['id'],
+                         preview=row['preview'], message_id='<stale@example.org>', batch_id=batch)
+        self.assertEqual(stale.status_code, 400)
+        self.assertEqual(self.api('queue_mail', kind='initial', mail_event='next', version=preview['version']).status_code, 400)
+        revised = self.api('email_preview', kind='initial', mail_event='next').json
+        self.assertEqual(self.api('queue_mail', kind='initial', mail_event='next', version=revised['version']).status_code, 200)
+        ready = self.api('preview_queued', secret='operator-test').json['plans']
+        self.assertEqual(len(ready), 1)
+        self.assertIn('Please join the discussion.', ready[0]['messages'][0]['body'])
 
     def test_cancellation_and_changed_recipients_cannot_be_sent_from_stale_queue(self):
         preview = self.api('email_preview', kind='invite', mail_event='next').json
@@ -173,6 +230,39 @@ class AdminPanelTests(unittest.TestCase):
         self.save(self.roster()['users'][0], email='new@example.org')
         self.assertEqual(self.api('preview_queued', secret='operator-test').json['plans'], [])
         self.assertEqual(self.api('queue_mail', kind='invite', mail_event='next', version=preview['version']).status_code, 400)
+
+    def test_initial_outreach_targets_first_seminar_once_and_enables_reminders(self):
+        with patch.object(self.service.organizer, 'upcoming_seminars', return_value=[{'id':'seminar-2'}]):
+            preview = self.api('email_preview', kind='initial', mail_event='next')
+        self.assertEqual(preview.status_code, 200, preview.json)
+        plan = preview.json
+        self.assertEqual(plan['event_id'], 'seminar-1')
+        self.assertEqual(len(plan['messages']), 1)
+        body = plan['messages'][0]['body']
+        self.assertIn('first D3 seminar', body)
+        self.assertIn('other seminars and the onsite', body)
+        self.assertIn('event=seminar-1#token=[personal-link]', body)
+        self.assertNotIn('A'*43, body)
+        self.assertEqual(self.api('email_preview', kind='initial', mail_event='onsite').status_code, 400)
+        batch = self.api('queue_mail', kind='initial', mail_event='next', version=plan['version']).json['batch_id']
+        sender = self.api('preview_queued', secret='operator-test').json['plans'][0]
+        row = sender['messages'][0]
+        self.assertEqual(sender['kind'], 'initial')
+        self.assertEqual(self.api('email_preview', kind='remind', mail_event='seminar-1').json['messages'], [])
+        claim = self.api('claim_mail', secret='operator-test', kind='initial', participant_id=row['id'],
+                         preview=row['preview'], message_id='<initial@example.org>', batch_id=batch)
+        self.assertTrue(claim.json['claimed'])
+        self.assertEqual(self.api('email_preview', kind='initial', mail_event='next').json['messages'], [])
+        self.assertEqual(self.api('email_preview', kind='remind', mail_event='seminar-1').json['messages'], [])
+        self.assertEqual(self.api('finish_mail', secret='operator-test', participant_id=row['id'], key=row['key'], message_id='<initial@example.org>').status_code, 200)
+        self.assertEqual(len(self.api('email_preview', kind='remind', mail_event='seminar-1').json['messages']), 1)
+        self.assertEqual(self.api('email_preview', kind='remind', mail_event='seminar-2').json['messages'], [])
+        proposal = dict(deadline='2026-10-08T17:00', options=[dict(id=s['id'], start=s['start'][:16]) for s in self.store.dashboard()['poll']['slots']])
+        proposal['options'][0]['start'] = '2026-11-02T14:00'
+        schedule = self.service.organizer.preview_schedule('seminar-1', proposal)
+        self.service.organizer.save_schedule('seminar-1', proposal, schedule['preview'], True)
+        self.assertEqual(self.api('email_preview', kind='initial', mail_event='next').json['messages'], [])
+        self.assertEqual(self.api('mail_batches').json['batches'][0]['counts']['sent'], 1)
 
 
 if __name__ == '__main__':

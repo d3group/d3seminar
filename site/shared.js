@@ -119,6 +119,11 @@ export function durationLabel(event) {
   return minutes % 60 === 0 ? `${minutes / 60} hours` : `${minutes} minutes`;
 }
 
+export function deadlineLabel(poll) {
+  return new Intl.DateTimeFormat('en-GB', {timeZone:poll.timezone, weekday:'long', day:'numeric', month:'long',
+    year:'numeric'}).format(new Date(poll.deadline));
+}
+
 export function agendaSchedule(event, talks, finalEvent = null) {
   const minutes = value => { const [hour, minute] = value.split(':').map(Number); return hour * 60 + minute; };
   const clock = value => `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
@@ -273,7 +278,7 @@ export function renderProgramme(container, programme = {}, heading = 'h4') {
 }
 
 export async function loadProgramme(config, token, includeVotes = false, includePresentations = false) {
-  return Promise.all(config.events.map(async event => {
+  const entries = await Promise.all(config.events.map(async event => {
     try {
       const response = await apiFetch('invitation', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token, event_id:event.id, include_votes:includeVotes, include_presentations:includePresentations})});
       const invitation = await response.json();
@@ -281,6 +286,8 @@ export async function loadProgramme(config, token, includeVotes = false, include
       return {event, invitation};
     } catch (error) { return {event, error:error.message}; }
   }));
+  updateOrganizerNavigation(token, entries.find(entry => entry.invitation?.is_organizer)?.event.id);
+  return entries;
 }
 
 export function presentationProgress(entries) {
@@ -345,4 +352,18 @@ export function preserveInvitationLinks(token) {
     url.hash = new URLSearchParams({token}).toString();
     link.href = url.href;
   });
+}
+
+// Call only with an event whose organizer access has been verified by the backend.
+export function updateOrganizerNavigation(token, eventId) {
+  const navigation = document.querySelector('.programme-tabs');
+  if (!navigation) return;
+  navigation.querySelector('[data-organizer-link]')?.remove();
+  if (!eventId) return;
+  const link = element('a', 'Admin');
+  link.href = 'admin.html?' + new URLSearchParams({event:eventId});
+  link.dataset.organizerLink = ''; link.dataset.invitationLink = '';
+  if (location.pathname.endsWith('/admin.html')) link.setAttribute('aria-current', 'page');
+  navigation.append(link);
+  preserveInvitationLinks(token);
 }

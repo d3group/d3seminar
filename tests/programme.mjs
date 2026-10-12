@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {answeredCount, responseComplete, nextEvent, nextSeminar, voteCounts, participantRings, ringArc, calendarDay, durationLabel, slotLabel, onsiteDays, agendaSchedule, presentationProgress} from '../site/shared.js';
+import {answeredCount, responseComplete, nextEvent, nextSeminar, voteCounts, participantRings, ringArc, calendarDay, durationLabel, deadlineLabel, slotLabel, onsiteDays, agendaSchedule, presentationProgress} from '../site/shared.js';
 
 const poll = {required_participants:20, slots:[{id:'a'}, {id:'b'}]};
 const invitation = (answers = {}, state = {}) => ({poll, answers, state});
 const entry = (id, answers = {}, state = {}) => ({event:{id}, invitation:invitation(answers, state)});
+
+test('reply deadlines use the event timezone through daylight-saving changes', () => {
+  assert.equal(deadlineLabel({deadline:'2026-10-16T15:00:00Z', timezone:'Europe/Berlin'}), 'Friday, 16 October 2026');
+  assert.equal(deadlineLabel({deadline:'2026-11-10T16:00:00Z', timezone:'Europe/Berlin'}), 'Tuesday, 10 November 2026');
+});
 
 test('saved titles count as proposals while missing abstracts remain details to follow', () => {
   const entries = ['seminar-1', 'seminar-2', 'seminar-3', 'onsite'].map(id => ({

@@ -443,7 +443,7 @@ def create_app(service):
                 return dict(ok=False, error='An active organizer invitation is required.'), 403
             # Email previews contain other people's access links; reserve them for the local sender.
             if action not in {'dashboard', 'finalize', 'preview_schedule', 'save_schedule', 'save_programme', 'reorder_presentations', 'move_presentation',
-                              'users', 'save_user', 'email_preview', 'queue_mail', 'mail_batches', 'cancel_mail'}:
+                              'users', 'save_user', 'email_draft', 'save_email_draft', 'email_preview', 'queue_mail', 'mail_batches', 'cancel_mail'}:
                 return dict(ok=False, error='This action requires the local administration credentials.'), 403
         if action == 'users':
             return dict(ok=True, **users.listing(organizer))
@@ -451,7 +451,12 @@ def create_app(service):
             user_id = users.save(organizer, data.get('user'), data.get('version'), None if operator else data.get('token'))
             return dict(ok=True, user_id=user_id, is_organizer=operator or users.organizer_access(service.store, data.get('token')))
         if action == 'email_preview':
-            return dict(ok=True, **email_queue.preview(organizer, data.get('mail_event', 'next'), data.get('kind')))
+            return dict(ok=True, **email_queue.preview(organizer, data.get('mail_event', 'next'), data.get('kind'), data.get('draft_version')))
+        if action == 'email_draft':
+            return dict(ok=True, **email_queue.draft(organizer, data.get('mail_event', 'next'), data.get('kind')))
+        if action == 'save_email_draft':
+            return dict(ok=True, **email_queue.save_draft(organizer, data.get('mail_event', 'next'), data.get('kind'),
+                        dict(subject=data.get('subject'), body=data.get('body')), data.get('version')))
         if action == 'queue_mail':
             batch_id = email_queue.enqueue(organizer, data.get('mail_event', 'next'), data.get('kind'), data.get('version'))
             return dict(ok=True, batch_id=batch_id)

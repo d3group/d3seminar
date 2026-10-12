@@ -256,6 +256,8 @@ a.progress-step:hover .progress-step-name { text-decoration: underline; }
 .event-disclosure > .event-content { padding-top: 14px; }
 .event-disclosure-summary .event-card-heading h3 { margin: 0; }
 .event-summary-period { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.event-reply-deadline { margin: 10px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.event-reply-deadline time, #home-deadline time { color: #8b2635; font-weight: 600; }
 .event-disclosure[open] .event-summary-period { display: none; }
 .event-card:has(.next-seminar-note), .agenda-event:has(.next-seminar-note) { padding-top: 40px; }
 .next-seminar-note { position: absolute; top: -20px; right: 24px; width: 146px; margin: 0; padding: 14px 10px 10px; transform: rotate(3deg); background: #f0d8bd; color: #4e4225; border-radius: 2px 3px 4px 3px; box-shadow: 2px 5px 10px #302a181a; font-family: "Noteworthy", "Segoe Print", "Comic Sans MS", cursive; font-size: 25px; font-weight: 400; line-height: 1.25; text-align: center; }
@@ -444,7 +446,7 @@ textarea { display: block; width: 100%; min-height: 90px; resize: vertical; bord
 .admin-editor, .mail-controls { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
 .admin-editor > summary { cursor: pointer; font-weight: 600; font-size: 16px; margin-bottom: 16px; }
 .admin-editor label, #mail-send-form > label { display: block; font-size: 13px; margin-bottom: 6px; }
-.admin-editor input:not([type="checkbox"]), #mail-kind, #mail-event, .user-form > input, .user-form > select { display: block; max-width: 100%; min-width: 0; padding: 9px 10px; color: var(--ink); background: white; border: 1px solid #b9c8d4; border-radius: 3px; font: inherit; font-size: 13px; margin-bottom: 16px; }
+.admin-editor input:not([type="checkbox"]), #mail-kind, #mail-event, #draft-subject, .user-form > input, .user-form > select { display: block; max-width: 100%; min-width: 0; padding: 9px 10px; color: var(--ink); background: white; border: 1px solid #b9c8d4; border-radius: 3px; font: inherit; font-size: 13px; margin-bottom: 16px; }
 .programme-form input { width: 100%; }
 .programme-form { max-width: 620px; }
 .schedule-option { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; margin-top: 12px; }
@@ -576,3 +578,16 @@ td.unavailable { color: #8e4033; }
 .user-form .danger { color:#842d38; }
 .email-batches { margin-top:2.5rem; }
 .email-batches code { overflow-wrap:anywhere; }
+.mail-outlines { margin:1rem 0 1.5rem; padding:1rem 0; border-block:1px solid var(--line); }
+.mail-outlines summary, .draft-placeholders summary { cursor:pointer; font-weight:600; }
+.mail-outlines ol { padding-left:1.3rem; margin-bottom:0; }
+.mail-outlines li { margin:.65rem 0; font-size:14px; line-height:1.6; }
+.mail-draft { border:1px solid var(--line); padding:1.25rem; margin:1.25rem 0; }
+.mail-draft .dashboard-summary { margin-bottom:.5rem; }
+#mail-draft-form > label { display:block; margin:1rem 0 .4rem; font-weight:600; }
+#draft-subject, #draft-body { width:100%; }
+#draft-body { line-height:1.65; resize:vertical; }
+.draft-placeholders { margin:1rem 0; font-size:13px; }
+#draft-fields { display:flex; flex-wrap:wrap; gap:.4rem; margin:.75rem 0; }
+#draft-fields button { background:#fff; color:var(--link); border:1px solid var(--line); padding:.4rem .65rem; font-size:12px; }
+#draft-notice { margin:0; padding:.5rem 0; }

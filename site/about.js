@@ -1,6 +1,11 @@
-import {preserveInvitationLinks, participantRings, ringArc} from './shared.js';
+import {loadConfig} from './api.js';
+import {preserveInvitationLinks, participantRings, ringArc, loadProgramme} from './shared.js';
 
-preserveInvitationLinks(new URLSearchParams(location.hash.slice(1)).get('token'));
+const token = new URLSearchParams(location.hash.slice(1)).get('token');
+preserveInvitationLinks(token);
+if (token) loadConfig().then(config => {
+  if (config.service_status === 'ready') return loadProgramme(config, token);
+}).catch(() => {}); // Keep the guide readable if organizer access cannot be checked.
 
 const people = [
   {name:'Person A', role:'professor'}, {name:'Person B', role:'student'},

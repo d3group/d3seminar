@@ -38,6 +38,7 @@ try {
       assert.equal(await preview.locator('#home-notice').isVisible(), true);
       assert.match(await preview.locator('#home-notice').textContent(), /provisional/i);
       assert.equal(await preview.locator('#programme-progress').isVisible(), false);
+      assert.equal(await preview.locator('.event-reply-deadline:visible').count(), 0);
       assert.equal(await preview.locator('.event-card-bottom:visible, input:visible, textarea:visible').count(), 0);
       assert.equal(await preview.locator('button.calendar-date:not(:disabled)').count(), 0);
       assert.equal(await preview.locator('.date-leading, .date-confirmed').filter({has:preview.locator('.calendar-day-number')}).count(), 0);
@@ -70,10 +71,29 @@ try {
     await preview.close();
   }
   await page.goto(details.home);
-  await page.getByText('Hello Browser Test.', {exact:false}).waitFor();
+  await page.getByText('Hello Browser.', {exact:false}).waitFor();
   assert.doesNotMatch(await page.title(), /STALE STATIC COPY/);
+  const deadlineText = 'Please set your preferences by Wednesday, 7 October 2026.';
+  assert.equal(await page.locator('[data-event="seminar-1"] .event-reply-deadline').textContent(), deadlineText);
+  const secondDeadline = page.locator('[data-event="seminar-2"] .event-reply-deadline');
+  assert.equal(await secondDeadline.isVisible(), true);
+  const adminKey = new URLSearchParams(new URL(details.admin).hash.slice(1)).get('key');
+  const adminApi = async (action, data = {}) => {
+    const response = await page.request.post(details.api + 'api/admin', {data:{action, secret:adminKey, event_id:'seminar-2', ...data}});
+    assert.equal(response.status(), 200);
+    return response.json();
+  };
+  const secondPoll = (await adminApi('dashboard')).poll;
+  const proposal = {deadline:'2026-10-08T17:00', options:secondPoll.slots.map(slot => ({id:slot.id, start:slot.start.slice(0,16)}))};
+  const review = await adminApi('preview_schedule', {proposal});
+  assert.equal(review.resets_answers, false);
+  await adminApi('save_schedule', {proposal, preview:review.preview, confirm_reset:false});
+  await page.reload();
+  await secondDeadline.getByText('Thursday, 8 October 2026', {exact:true}).waitFor();
+  assert.equal(await page.locator('[data-event="seminar-1"] .event-reply-deadline').textContent(), deadlineText);
   await page.getByRole('link', {name:'Confirm Seminar 1', exact:true}).click();
   assert.equal(new URL(page.url()).pathname, '/d3seminar/event.html');
+  await page.locator('#poll-deadline').getByText(deadlineText, {exact:true}).waitFor();
   await page.locator('.poll-option').first().getByLabel('Available', {exact:true}).check();
   await page.getByRole('button', {name:'Save for later', exact:true}).click();
   await page.locator('#notice').filter({hasText:'Response saved.'}).waitFor();
@@ -179,6 +199,7 @@ try {
   await visitor.goto(details.base);
   await visitor.locator('button.calendar-date').first().click();
   assert.equal(await visitor.locator('.calendar-response-form, .vote-people').count(), 0);
+  assert.equal(await visitor.locator('[data-event="seminar-1"] .event-reply-deadline').textContent(), deadlineText);
   await page.goto(details.admin);
   await page.getByRole('button', {name:'Refresh responses', exact:true}).waitFor();
   await page.locator('#admin-notice').filter({hasText:'Showing saved responses'}).waitFor();
@@ -213,6 +234,9 @@ try {
     }
     await page.getByRole('button', {name:'Events', exact:true}).click();
   }
+  await visitor.goto(details.base + '?event=onsite');
+  await visitor.locator('[data-event="onsite"] .date-confirmed').first().waitFor();
+  assert.equal(await visitor.locator('[data-event="onsite"] .event-reply-deadline').isVisible(), false);
   const agendaApi = async (action, data) => {
     const response = await page.request.post(details.api + 'api/' + action, {data:{event_id:'seminar-2', ...data}});
     const result = await response.json();

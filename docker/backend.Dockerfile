@@ -9,7 +9,7 @@ RUN groupadd --gid 10001 seminar && useradd --uid 10001 --gid seminar --no-creat
     && mkdir /data && chown seminar:seminar /data
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-COPY scripts/server.py scripts/seminar.py scripts/organizer.py scripts/presentations.py scripts/backup.py scripts/users.py scripts/models.py scripts/database.py scripts/api_client.py scripts/email_queue.py /app/scripts/
+COPY scripts/server.py scripts/seminar.py scripts/organizer.py scripts/presentations.py scripts/backup.py scripts/users.py scripts/models.py scripts/database.py scripts/api_client.py scripts/email_queue.py scripts/mail_templates.py /app/scripts/
 COPY alembic.ini /app/alembic.ini
 COPY migrations/ /app/migrations/
 COPY site/ /app/site/

@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import seminar
 import presentations
+import mail_templates
 from sqlalchemy import select
 from models import Invitation, User
 
@@ -225,14 +226,24 @@ class Organizer:
                 events.append((min(s['start'] for s in remaining), entry))
         return [entry for _, entry in sorted(events, key=lambda item:datetime.fromisoformat(item[0]))]
 
-    def mail_queue(self, event_id, kind):
-        if kind not in {'invite', 'remind', 'present', 'confirm'}:
+    def mail_event_id(self, event_id, kind):
+        if kind not in mail_templates.TEMPLATES:
             raise ValueError('Choose a supported email type.')
-        upcoming = self.upcoming_seminars()
+        if kind == 'initial':
+            if event_id not in {'next', 'seminar-1'}:
+                raise ValueError('Initial outreach is for the first seminar only.')
+            event_id = 'seminar-1'
         if event_id == 'next':
+            upcoming = self.upcoming_seminars()
             if not upcoming:
                 raise ValueError('There are no upcoming seminars.')
             event_id = upcoming[0]['id']
+        seminar.event_config(self.config, event_id)
+        return event_id
+
+    def mail_queue(self, event_id, kind):
+        from email_queue import draft
+        event_id = self.mail_event_id(event_id, kind)
         config = seminar.event_config(self.config, event_id)
         local = seminar.read_json(self.private / 'settings.json')
         invitations = self.records(event_id)
@@ -241,10 +252,12 @@ class Organizer:
         dashboard = self.stores[event_id].dashboard()
         config.update(dashboard['poll'] or {})
         responses = {p['id']:p for p in dashboard['participants']}
-        index = next((i for i,e in enumerate(upcoming) if e['id'] == event_id), None)
-        later = upcoming[index+1:] if index is not None else []
+        later = []
         planned, registered = set(), {}
         if kind == 'present':
+            upcoming = self.upcoming_seminars()
+            index = next((i for i,e in enumerate(upcoming) if e['id'] == event_id), None)
+            later = upcoming[index+1:] if index is not None else []
             for entry in [{'id':event_id}, *later]:
                 store = self.stores[entry['id']]
                 with store.session() as session:
@@ -254,6 +267,8 @@ class Organizer:
                         registered.setdefault(person['email'], set()).add(entry['id'])
                         if presentations.own(session, person['id']).get('title'):
                             planned.add(person['email'])
+        saved = draft(self, event_id, kind)
+        template = {key:saved[key] for key in ('subject', 'body')}
         messages = []
         for invite in invitations:
             key = seminar.eligible(invite, responses.get(invite['id']), kind, dashboard['state'])
@@ -261,7 +276,7 @@ class Organizer:
                 continue
             alternatives = [e for e in later if e['id'] in registered.get(invite['email'], set())]
             row = dict(id=invite['id'], key=key, name=invite['name'],
-                       **seminar.message_content(config, local, invite, kind, dashboard['state'], alternatives))
+                       **seminar.message_content(config, local, invite, kind, dashboard['state'], alternatives, template))
             row['preview'] = seminar.event_revision(dict(message=row, sender=local['sender_email'], sender_name=local['sender_name']))
             messages.append(row)
         return dict(event_id=event_id, event_name=config.get('name', config['title']), kind=kind, messages=messages,

@@ -73,7 +73,7 @@ def run(settings, directory, kind, send=False, event='next'):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('kind', choices=['setup', 'invite', 'remind', 'present', 'confirm', 'queued'])
+    parser.add_argument('kind', choices=['setup', 'initial', 'invite', 'remind', 'present', 'confirm', 'queued'])
     parser.add_argument('--event', default='next', help='Defaults to the next upcoming seminar; optionally choose an event id')
     parser.add_argument('--send', action='store_true', help='Send after the local password prompt; default is preview only')
     parser.add_argument('--from-settings', type=Path, default=seminar.ROOT/'data/settings.json', help='Existing private settings to import once')

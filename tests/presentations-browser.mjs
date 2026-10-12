@@ -83,6 +83,7 @@ try {
   await organizer.goto(details.base + 'admin.html#token=' + 'P'.repeat(43));
   await organizer.locator('#admin-notice.error').waitFor();
   assert.equal(await organizer.locator('#dashboard').isVisible(), false);
+  assert.equal(await organizer.getByRole('link', {name:'Admin', exact:true}).count(), 0);
   await organizer.close();
   assert.equal(await firstTable.getByRole('link', {name:'browser-test@example.com', exact:true}).getAttribute('href'), 'mailto:browser-test%40example.com');
   assert.deepEqual(await firstTable.getByRole('columnheader').allTextContents(), ['Presenter', 'Time slot', 'Talk & abstract', 'Explainer', 'Slides']);
@@ -180,6 +181,7 @@ try {
   assert.equal(await professor.locator('#presentation-nudge').isVisible(), false);
   await professor.getByRole('navigation', {name:'Main navigation'}).getByRole('link', {name:'Agenda', exact:true}).click();
   await professor.locator('.talk-table').getByText('Decision-focused learning', {exact:true}).waitFor();
+  assert.equal(await professor.getByRole('link', {name:'Admin', exact:true}).count(), 0);
   assert.equal(await professor.locator('[data-reorder]').count(), 0);
   assert.equal(await professor.getByRole('link', {name:'Organize event', exact:true}).count(), 0);
   assert.equal(await professor.locator('#presentation-editor').isVisible(), false);
