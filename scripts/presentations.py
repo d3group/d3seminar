@@ -38,6 +38,7 @@ def listing(store, session, viewer_id=None):
         if talk and (viewer_id is not None or talk['visibility'] == 'public'):
             row = dict(name=person['name'])
             if viewer_id is not None:
+                row['email'] = person['email']
                 row.update({key:talk[key] for key in ('title', 'abstract', 'visibility', 'status', 'presentation_minutes', 'questions_minutes', 'explainer_url', 'slides_url', 'files')})
                 row['mine'] = person['id'] == viewer_id
             result.append(row)

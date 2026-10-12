@@ -68,6 +68,8 @@ try {
   assert.equal(await page.locator('#presentation-editor').isVisible(), false);
   const firstTable = page.locator('[data-event="seminar-1"] .talk-table');
   await firstTable.getByText('Decision-focused learning', {exact:true}).waitFor();
+  await firstTable.getByText('Browser Test', {exact:true}).waitFor();
+  assert.equal(await firstTable.getByRole('link', {name:'browser-test@example.com', exact:true}).getAttribute('href'), 'mailto:browser-test%40example.com');
   assert.deepEqual(await firstTable.getByRole('columnheader').allTextContents(), ['Presenter', 'Time slot', 'Talk & abstract', 'Explainer', 'Slides']);
   assert.equal(await firstTable.locator('.talk-row .talk-timeslot strong').textContent(), '14:00–14:35');
   assert.equal(await firstTable.locator('.agenda-open-slot .talk-timeslot strong').textContent(), '14:35–16:00');
@@ -83,7 +85,9 @@ try {
   await peek.goto(details.home);
   const preview = () => peek.locator('[data-event="seminar-1"] .agenda-preview');
   await preview().getByText('Decision-focused learning', {exact:false}).waitFor();
-  assert.match(await preview().textContent(), /Agenda.*1 talk.*Browser Test.*Decision-focused learning/);
+  assert.match(await preview().textContent(), /Agenda.*1 talk.*Browser.*Decision-focused learning/);
+  assert.equal(await preview().locator('.agenda-preview-talk strong').textContent(), 'Browser');
+  assert.doesNotMatch(await preview().textContent(), /Browser Test|browser-test@example.com/);
   assert.equal(await preview().getByText('How can a predictive model account for the decisions it informs?', {exact:true}).count(), 0);
   assert.equal(await preview().locator('table, .material-download, .talk-duration-bar').count(), 0);
   assert.ok((await preview().boundingBox()).height < 110);
@@ -175,6 +179,8 @@ try {
   assert.equal(await professor.getByLabel('Talk title', {exact:true}).inputValue(), 'Research perspectives');
   await page.reload();
   await firstTable.getByText('Research perspectives', {exact:true}).waitFor();
+  await firstTable.getByText('Professor Test', {exact:true}).waitFor();
+  await firstTable.getByRole('link', {name:'professor@example.com', exact:true}).waitFor();
   assert.equal(await firstTable.locator('.agenda-open-slot').count(), 0);
   assert.equal(await page.getByLabel('Talk title', {exact:true}).inputValue(), 'Decision-focused learning');
   await professor.goto(details.base + 'agenda.html');
@@ -210,8 +216,10 @@ try {
   assert.equal(await page.getByRole('radio', {name:'Public', exact:true}).isChecked(), true);
   await visitor.reload();
   await visitor.locator('[data-event="seminar-1"] .public-presenters').getByText('Browser Test', {exact:true}).waitFor();
+  assert.doesNotMatch(await visitor.locator('#agenda-list').textContent(), /browser-test@example.com|professor@example.com/);
+  assert.equal(await visitor.locator('#agenda-list a[href^="mailto:"]').count(), 0);
   await peek.goto(details.base);
-  await preview().getByText('Browser Test', {exact:true}).waitFor();
+  await preview().getByText('Browser', {exact:true}).waitFor();
   assert.match(await preview().textContent(), /1 public talk/);
   assert.equal(await peek.getByText('Decision-focused learning', {exact:false}).count(), 0);
   assert.equal(await peek.getByText('Professor Test', {exact:true}).count(), 0);

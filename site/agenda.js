@@ -118,7 +118,12 @@ function talkTable(event, talks, finalEvent) {
       details.append(placeholder); row.append(name, timeCell(event, slot), details); body.append(row);
       continue;
     }
-    const name = element('th', talk.name); name.scope = 'row'; name.dataset.label = 'Presenter';
+    const name = element('th', ''); name.scope = 'row'; name.dataset.label = 'Presenter';
+    name.append(element('span', talk.name));
+    if (talk.email) {
+      const email = element('a', talk.email, 'talk-presenter-email'); email.href = 'mailto:' + encodeURIComponent(talk.email);
+      name.append(email);
+    }
     const details = element('td', '', 'talk-description'); details.dataset.label = 'Talk & abstract';
     details.append(element('strong', talk.title));
     if (talk.status === 'placeholder') details.append(element('span', 'Provisional title', 'talk-visibility'));

@@ -35,7 +35,8 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(result['presentation'], professor)
         self.assertEqual([row['name'] for row in result['presentations']], ['Ada', 'Bea', 'Cora'])
         self.assertEqual([row['name'] for row in result['presentations'] if row['mine']], ['Bea'])
-        self.assertFalse(any('email' in row or 'token_hash' in row for row in result['presentations']))
+        self.assertEqual([row['email'] for row in result['presentations']], ['ada@example.com', 'bea@example.com', 'cora@example.com'])
+        self.assertFalse(any('token_hash' in row for row in result['presentations']))
         with self.assertRaisesRegex(ValueError, 'changed'):
             presentations.save(self.store, TOKEN, self.talk)
         with self.assertRaises(ValueError):

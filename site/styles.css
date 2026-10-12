@@ -180,6 +180,7 @@ h3 { font-size: 18px; line-height: 1.4; font-weight: 600; }
 .talk-table th:nth-child(3) { width: 37%; }
 .talk-table tbody th { font-weight: 500; }
 .talk-table tbody td, .talk-table tbody th { border-bottom: 1px solid var(--line); }
+.talk-presenter-email { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .talk-description > strong { display: block; font-size: 14px; margin-bottom: 6px; }
 .talk-description > a { display: inline-block; margin-top: 6px; }
 .talk-timeslot { font-variant-numeric: tabular-nums; }

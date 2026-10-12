@@ -312,7 +312,7 @@ function renderAgendaPreview(container, event, talks = null, invited = false) {
   if (count) {
     const first = talks[0];
     const preview = element('p', '', 'agenda-preview-talk');
-    preview.append(element('strong', first.name));
+    preview.append(element('strong', first.name.trim().split(/\s+/)[0]));
     if (invited) preview.append(element('span', ' · ' + first.title));
     container.append(preview);
   } else if (talks !== null) container.append(element('p', `No ${invited ? '' : 'public '}talks yet`, 'agenda-preview-empty'));
