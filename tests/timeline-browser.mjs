@@ -55,6 +55,25 @@ try {
   assert.ok(arrowBox.x >= cardBox.x + cardBox.width && arrowBox.y > cardBox.y && arrowBox.y + arrowBox.height < cardBox.y + cardBox.height);
   assert.equal(await page.getByRole('button', {name:'Earlier events', exact:true}).getAttribute('aria-disabled'), 'true');
   const first = page.locator('[data-event="seminar-1"]');
+  // Opening and switching response panels must preserve the calendar DOM and viewport.
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({width, height:844});
+    await shown(width === 390 ? ['seminar-1'] : ['seminar-1', 'seminar-2']);
+    const dates = first.locator('button.calendar-date');
+    await dates.first().evaluate(node => node.scrollIntoView({block:'center', behavior:'instant'}));
+    const calendar = await first.locator('.calendar-month').first().elementHandle();
+    const position = () => page.evaluate(() => ({y:scrollY, x:document.querySelector('.timeline-track').scrollLeft}));
+    const before = await position();
+    for (const date of [dates.first(), dates.nth(1), dates.nth(1)]) {
+      await date.click();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.deepEqual(await position(), before);
+      assert.equal(await calendar.evaluate(node => node.isConnected), true);
+    }
+    await calendar.dispose();
+  }
+  await page.setViewportSize({width:1440, height:1080});
+  await shown(['seminar-1', 'seminar-2']);
   await first.locator('button.calendar-date').first().click();
   await first.getByLabel('Available', {exact:true}).check();
   await page.getByRole('button', {name:'Later events', exact:true}).click();
@@ -86,7 +105,7 @@ try {
   await page.locator('#presentation-status.success').waitFor();
   await page.getByRole('button', {name:'View in agenda', exact:true}).click();
   await verticalAgenda();
-  await page.getByText('A later research discussion', {exact:true}).waitFor();
+  await page.locator('.talk-table').getByText('A later research discussion', {exact:true}).waitFor();
   assert.equal(await page.locator('[data-event="onsite"] .talk-table').evaluate(node => getComputedStyle(node).display), 'table');
   await page.screenshot({path:'test-results/agenda-vertical.png', fullPage:true});
   await page.setViewportSize({width:390, height:844});

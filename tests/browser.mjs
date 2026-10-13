@@ -534,8 +534,10 @@ try {
     assert.equal(await mark.evaluate(node => getComputedStyle(node).stroke), 'rgba(0, 0, 0, 0)');
   }
   assert.equal(await voteDates.nth(0).locator('.vote-mark').nth(3).getAttribute('d'), await voteDates.nth(1).locator('.vote-mark').nth(3).getAttribute('d'));
+  const beforeHover = await votesCard.boundingBox();
   await voteDates.first().locator('.vote-mark').nth(1).hover();
-  assert.equal(await votesCard.locator('.calendar-vote-hint').textContent(), 'Test Person 02 · Professor — Unavailable');
+  assert.deepEqual(await votesCard.boundingBox(), beforeHover);
+  assert.equal(await voteDates.first().locator('title').count(), 0);
   await votesPage.mouse.move(0, 0);
   await votesCard.screenshot({path:root+'test-results/votes-card-desktop.png'});
   await votesPage.locator('[data-event="onsite"]').screenshot({path:root+'test-results/onsite-pairs-desktop.png'});
@@ -598,8 +600,8 @@ try {
   assert.equal(await sharedDay.locator('.vote-person').count(), 20);
   await sharedDay.click();
   assert.equal(await onsiteCard.locator('.calendar-response-form fieldset').count(), 2);
-  assert.match(await onsiteCard.locator('.calendar-response-form legend').nth(0).textContent(), /14 Apr.*15 Apr/);
-  assert.match(await onsiteCard.locator('.calendar-response-form legend').nth(1).textContent(), /15 Apr.*16 Apr/);
+  assert.match(await onsiteCard.locator('.calendar-response-form legend').nth(0).textContent(), /14\.04\.2027.*15\.04\.2027/);
+  assert.match(await onsiteCard.locator('.calendar-response-form legend').nth(1).textContent(), /15\.04\.2027.*16\.04\.2027/);
   assert.equal(await onsiteCard.locator('.votes-slot').count(), 2);
   assert.deepEqual(await onsiteCard.locator('.is-pair-selected .calendar-day-number').allTextContents(), ['14', '15', '16']);
   assert.match(await onsiteCard.locator('.vote-people').nth(0).locator('li').first().textContent(), /Available$/);

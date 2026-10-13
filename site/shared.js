@@ -368,3 +368,57 @@ export function updateOrganizerNavigation(token, eventId) {
   navigation.append(link);
   preserveInvitationLinks(token);
 }
+
+function optionDates(slot, timezone) {
+  const date = value => new Intl.DateTimeFormat('de-DE', {timeZone:timezone, day:'2-digit', month:'2-digit', year:'numeric'}).format(new Date(value));
+  return date(slot.start) === date(slot.end) ? [date(slot.start)] : [date(slot.start), date(slot.end)];
+}
+
+function optionHours(slot, timezone, dailyHours) {
+  const hours = dailyHours || slot.daily_hours;
+  const time = value => new Intl.DateTimeFormat('de-DE', {timeZone:timezone, hour:'2-digit', minute:'2-digit', hourCycle:'h23'}).format(new Date(value));
+  if (!hours) return [`${time(slot.start)}–${time(slot.end)} Uhr`];
+  return [`${hours.start}–${hours.end} Uhr`, ...(hours.last_day_end ? [`Final day: ${hours.start}–${hours.last_day_end} Uhr`] : [])];
+}
+
+export function germanSlotLabel(slot, timezone, dailyHours = slot.daily_hours) {
+  return `${optionDates(slot, timezone).join(' – ')} · ${optionHours(slot, timezone, dailyHours).join(' · ')}`;
+}
+
+export function availabilityCard(slot, timezone, dailyHours = slot.daily_hours) {
+  const fieldset = document.createElement('fieldset');
+  fieldset.className = 'poll-option';
+  fieldset.dataset.slot = slot.id;
+  const legend = document.createElement('legend');
+  legend.className = 'sr-only';
+  legend.textContent = germanSlotLabel(slot, timezone, dailyHours);
+  fieldset.append(legend);
+  const heading = element('div', '', 'poll-option-heading');
+  heading.setAttribute('aria-hidden', 'true');
+  const dates = optionDates(slot, timezone);
+  heading.append(element('span', new Intl.DateTimeFormat('de-DE', {timeZone:timezone, weekday:'long'}).format(new Date(slot.start)), 'poll-option-weekday'));
+  const dateRow = element('div', '', 'poll-option-date-row');
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('class', 'poll-option-calendar');
+  icon.setAttribute('aria-hidden', 'true'); icon.setAttribute('focusable', 'false');
+  const outline = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  outline.setAttribute('d', 'M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM7 2v4m10-4v4M3 10h18M7 14h2m3 0h2m3 0h1M7 18h2m3 0h2');
+  icon.append(outline);
+  const dateText = element('div', '');
+  dates.forEach((value, index) => dateText.append(element('strong', (index ? '– ' : '') + value, 'poll-option-date')));
+  dateRow.append(icon, dateText); heading.append(dateRow);
+  optionHours(slot, timezone, dailyHours).forEach(value => heading.append(element('span', value, 'poll-option-time')));
+  fieldset.append(heading);
+  return fieldset;
+}
+
+export function availabilityChoice(slotId, value, title, checked) {
+  const label = element('label', '', 'availability-choice'); label.title = title;
+  const input = document.createElement('input');
+  input.type = 'radio'; input.name = 'answer:' + slotId; input.value = value;
+  input.setAttribute('aria-label', title); input.checked = checked;
+  const icon = element('span', value === 'available' ? '✓' : '✗', 'availability-icon');
+  icon.setAttribute('aria-hidden', 'true');
+  label.append(input, icon, element('span', title, 'sr-only'));
+  return label;
+}

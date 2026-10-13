@@ -93,7 +93,7 @@ try {
   assert.equal(await page.locator('[data-event="seminar-1"] .event-reply-deadline').textContent(), deadlineText);
   await page.getByRole('link', {name:'Confirm Seminar 1', exact:true}).click();
   assert.equal(new URL(page.url()).pathname, '/d3seminar/event.html');
-  await page.locator('#poll-deadline').getByText(deadlineText, {exact:true}).waitFor();
+  await page.locator('#poll-deadline').getByText('Please set your preferences by Mittwoch, 07.10.2026.', {exact:true}).waitFor();
   await page.locator('.poll-option').first().getByLabel('Available', {exact:true}).check();
   await page.getByRole('button', {name:'Save for later', exact:true}).click();
   await page.locator('#notice').filter({hasText:'Response saved.'}).waitFor();

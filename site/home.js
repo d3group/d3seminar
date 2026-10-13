@@ -1,5 +1,5 @@
 import {apiFetch, loadConfig, serviceNotice} from './api.js';
-import {$, element, selectEvent, slotLabel, eventHref, durationLabel, deadlineLabel, preserveInvitationLinks, answeredCount, responseComplete, eventFinished, loadProgramme, nextEvent, nextSeminar, eventDisclosure, eventTimeline, programmeProgress, showSavedResponse, voteCounts, renderProgramme, participantRings, ringArc, calendarDay, renderPresentationNudge, onsiteDays} from './shared.js';
+import {$, element, availabilityCard, availabilityChoice, selectEvent, slotLabel, eventHref, durationLabel, deadlineLabel, preserveInvitationLinks, answeredCount, responseComplete, eventFinished, loadProgramme, nextEvent, nextSeminar, eventDisclosure, eventTimeline, programmeProgress, showSavedResponse, voteCounts, renderProgramme, participantRings, ringArc, calendarDay, renderPresentationNudge, onsiteDays} from './shared.js';
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
 const requestedEvent = new URLSearchParams(location.search).get('event');
 preserveInvitationLinks(token);
@@ -11,7 +11,7 @@ function answerFor(person, slot) {
   const answer = person.answers[slot.id || slot.slot_id];
   return ['available', 'unavailable'].includes(answer) ? answer : 'unknown';
 }
-function voteRing(people, slots, hint) {
+function voteRing(people, slots) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 60 60'); svg.setAttribute('aria-hidden', 'true');
   svg.classList.add('vote-ring');
@@ -23,16 +23,10 @@ function voteRing(people, slots, hint) {
       const answers = slots.map(slot => answerFor(person, slot));
       const segments = new Set(answers).size === 1 ? [answers[0]] : answers;
       segments.forEach((answer, segment) => {
-        const label = `${person.name} · ${roleNames[ring.role]} — ${answerNames[answer]}`
-          + (segments.length > 1 ? ` · Option ${segment + 1}` : '');
         const mark = document.createElementNS(svg.namespaceURI, 'path');
         const arc = ringArc(ring, index, segment, segments.length);
         mark.setAttribute('d', arc.path);
         mark.classList.add('vote-mark', 'vote-' + answer);
-        const title = document.createElementNS(svg.namespaceURI, 'title'); title.textContent = label;
-        mark.append(title);
-        mark.addEventListener('pointerenter', () => { hint.textContent = label; hint.hidden = false; });
-        mark.addEventListener('pointerleave', () => { hint.hidden = true; hint.textContent = ''; });
         personMarks.append(mark);
       });
       group.append(personMarks);
@@ -67,7 +61,6 @@ function renderCalendar(container, event, confirmed = false, people = null, edit
     }
   }
   container.replaceChildren();
-  const hint = element('p', '', 'calendar-vote-hint'); hint.hidden = true;
   const panel = element('section', '', 'calendar-votes');
   panel.id = 'votes-' + event.id; panel.hidden = true; panel.tabIndex = -1;
   panel.setAttribute('aria-label', 'Responses for ' + event.name);
@@ -83,7 +76,7 @@ function renderCalendar(container, event, confirmed = false, people = null, edit
     pairedCells.forEach(({cell}) => cell.classList.remove('is-pair-selected'));
     optionLines.forEach(({line}) => line.classList.remove('is-option-selected'));
     selectedDate?.setAttribute('aria-expanded', 'false');
-    selectedDate?.focus(); selectedDate = null;
+    selectedDate?.focus({preventScroll:true}); selectedDate = null;
   }
   function responseForm(slots) {
     const form = element('form', '', 'calendar-response-form');
@@ -100,18 +93,15 @@ function renderCalendar(container, event, confirmed = false, people = null, edit
       editor.onEdit(dirty);
     };
     for (const slot of slots) {
-      const fieldset = element('fieldset', '', 'calendar-choice');
-      fieldset.append(element('legend', slotLabel(slot, event.timezone, event.daily_hours)));
+      const fieldset = availabilityCard(slot, event.timezone, event.daily_hours);
+      fieldset.classList.add('calendar-choice');
       const choices = element('div', '', 'availability-choices');
       for (const value of ['available', 'unavailable']) {
-        const label = element('label', '', 'availability-choice');
-        const input = document.createElement('input');
-        input.type = 'radio'; input.name = 'answer:' + slot.id; input.value = value;
-        input.checked = draft[slot.id] === value;
-        input.addEventListener('change', () => { draft[slot.id] = value; update(true); });
-        label.append(input, element('span', answerNames[value])); choices.append(label);
+        const label = availabilityChoice(slot.id, value, answerNames[value], draft[slot.id] === value);
+        label.querySelector('input').addEventListener('change', () => { draft[slot.id] = value; update(true); });
+        choices.append(label);
       }
-      const clear = element('button', 'Clear answer', 'text-button'); clear.type = 'button';
+      const clear = element('button', 'Clear answer', 'clear-answer'); clear.type = 'button';
       clear.addEventListener('click', () => {
         draft[slot.id] = '';
         choices.querySelectorAll('input').forEach(input => input.checked = false); update(true);
@@ -176,7 +166,7 @@ function renderCalendar(container, event, confirmed = false, people = null, edit
       }
       panel.append(list);
     }
-    panel.hidden = false; panel.focus();
+    panel.hidden = false; panel.focus({preventScroll:true});
   }
   panel.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); closeVotes(); } });
   const months = [...new Set([...dates.keys()].sort().map(date => date.slice(0, 7)))];
@@ -228,21 +218,19 @@ function renderCalendar(container, event, confirmed = false, people = null, edit
             }
           }
           const date = element(slots ? (canInspect || !token ? 'button' : 'a') : 'span', '', 'calendar-date');
-          if (dayNote) date.title = dayNote;
           date.append(element('span', String(day), 'calendar-day-number'));
           if (slots) {
             date.classList.add('date-' + state);
             const label = `${standingNames[state]}: ${slots.map(slot => slotLabel(slot, event.timezone, event.daily_hours)).join('; ')}`;
-            date.title = dayNote ? `${dayNote}. ${label}` : label;
             date.setAttribute('aria-label', `${day} ${monthLabel}. ${dayNote ? dayNote + '. ' : ''}${label}. ${canInspect ? 'Show responses for' : 'View'} ${event.name}.`);
             if (canInspect) {
               date.dataset.selection = key;
               date.type = 'button'; date.setAttribute('aria-expanded', 'false'); date.setAttribute('aria-controls', panel.id);
-              if (people) date.append(voteRing(people, slots, hint));
+              if (people) date.append(voteRing(people, slots));
               date.addEventListener('click', () => showVotes(date, slots));
               dateButtons.set(key, {date, slots});
             } else if (token) {
-              date.href = eventHref(event.id, token); date.title = dayNote ? `${dayNote}. ${label}` : label;
+              date.href = eventHref(event.id, token);
             } else { date.type = 'button'; date.disabled = true; }
           }
           cell.append(date);
@@ -289,7 +277,7 @@ function renderCalendar(container, event, confirmed = false, people = null, edit
       const mark = element('span', '', 'vote-swatch vote-' + state); mark.setAttribute('aria-hidden', 'true');
       item.append(mark, element('span', answerNames[state])); legend.append(item);
     }
-    container.append(legend, hint);
+    container.append(legend);
     if (people.some(person => !roleNames[person.role])) container.append(element('p', 'People awaiting a role appear in the response list.', 'calendar-vote-hint'));
   }
   if (canInspect) {

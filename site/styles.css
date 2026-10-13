@@ -280,7 +280,7 @@ a.progress-step:hover .progress-step-name { text-decoration: underline; }
 .event-calendar th, .event-calendar td { text-align: center; padding: 3px 0; border: 0; line-height: 1; }
 .event-calendar th { color: var(--muted); font-size: 11px; font-weight: 400; padding-bottom: 9px; }
 .calendar-weekend, .calendar-day-off .calendar-date, .calendar-day-off::before, .calendar-day-off::after { opacity: .4; }
-.calendar-day-off .calendar-date:is(a, button):is(:hover, :focus-visible) { opacity: 1; }
+.calendar-day-off .calendar-date:is(a, button):focus-visible { opacity: 1; }
 .event-calendar abbr { text-decoration: none; }
 .date-proposed { --date-line: dotted; }
 .date-leading { --date-line: dashed; }
@@ -318,8 +318,14 @@ a.progress-step:hover .progress-step-name { text-decoration: underline; }
 .option-continuation-out { right: 0; }
 .calendar-date { display: flex; align-items: center; justify-content: center; width: min(36px, 100%); aspect-ratio: 1; margin-inline: auto; border: 1px solid transparent; border-radius: 50%; color: var(--muted); font-size: 13px; }
 a.calendar-date { color: var(--link); border: 1.5px var(--date-line) var(--link); font-weight: 600; text-decoration: none; }
-a.calendar-date:hover { text-decoration: underline; text-underline-offset: 3px; }
 button.calendar-date { position: relative; width: min(44px, 100%); padding: 0; background: none; border: 1.5px var(--date-line) var(--link); color: var(--link); font-weight: 600; }
+.calendar-date:is(a, button) { transition: background-color .15s ease, filter .15s ease; }
+@media (hover: hover) {
+  .calendar-date:is(a, button):not(:disabled):hover { background-color: #edf2f7; filter: brightness(.88); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .calendar-date:is(a, button) { transition: none; }
+}
 button.calendar-date[aria-expanded="true"] .calendar-day-number { text-decoration: underline; text-underline-offset: 3px; }
 .vote-ring { position: absolute; inset: 0; width: 100%; height: 100%; }
 .vote-mark { fill: currentColor; stroke: none; }
@@ -344,8 +350,7 @@ button.calendar-date[aria-expanded="true"] .calendar-day-number { text-decoratio
 .votes-heading button { min-height: 32px; }
 .calendar-response-form { border-bottom: 1px solid var(--line); padding-bottom: 18px; margin-bottom: 18px; }
 .calendar-response-form h5 { font-size: 14px; margin: 0 0 14px; }
-.calendar-choice { border: 0; padding: 0; margin: 0 0 16px; min-width: 0; }
-.calendar-choice legend { font-size: 13px; padding: 0; margin-bottom: 10px; }
+.calendar-choice.poll-option { margin-bottom: 16px; }
 .calendar-choice .availability-choice { font-size: 13px; min-height: 44px; padding: 8px; }
 .calendar-choice > button { font-size: 12px; min-height: 36px; }
 .calendar-save-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
