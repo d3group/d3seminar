@@ -70,6 +70,41 @@ try {
     assert.deepEqual(apiRequests, []);
     await preview.close();
   }
+  const progressPreview = await browser.newPage();
+  await progressPreview.clock.setFixedTime(new Date('2026-10-01T12:00:00Z'));
+  let preferenceState = 'partial';
+  await progressPreview.route(details.api + 'api/invitation', async route => {
+    const response = await route.fetch();
+    const invitation = await response.json();
+    const eventId = route.request().postDataJSON().event_id;
+    const complete = preferenceState === 'all' || preferenceState === 'first' && eventId === 'seminar-1';
+    const slots = complete ? invitation.poll.slots : eventId === 'seminar-1' ? invitation.poll.slots.slice(0, 1) : [];
+    invitation.answers = Object.fromEntries(slots.map(slot => [slot.id, 'available']));
+    await route.fulfill({response, json:invitation});
+  });
+  for (preferenceState of ['partial', 'first', 'all']) {
+    await progressPreview.goto('about:blank');
+    await progressPreview.goto(details.home);
+    await progressPreview.locator('#programme-progress').waitFor();
+    const firstDeadline = progressPreview.locator('[data-event="seminar-1"] .event-reply-deadline');
+    if (preferenceState === 'partial') {
+      assert.match(await firstDeadline.textContent(), /Please set your preferences by/);
+      assert.match(await progressPreview.locator('#home-deadline a').getAttribute('href'), /event=seminar-1/);
+    } else {
+      assert.equal(await firstDeadline.textContent(), 'Thank you for setting your preferences.');
+      if (preferenceState === 'first') {
+        assert.equal(await progressPreview.locator('#home-intro').textContent(), 'Thank you for setting your preferences for the next seminar in October 2026.');
+        assert.equal(await progressPreview.locator('#home-deadline').textContent(), ' You can already set your preferences for Seminar 2 in October 2026.');
+        assert.match(await progressPreview.locator('#home-deadline a').getAttribute('href'), /event=seminar-2/);
+        assert.match(await progressPreview.locator('[data-event="seminar-2"] .event-reply-deadline').textContent(), /Please set your preferences by/);
+      } else {
+        assert.equal(await progressPreview.locator('#home-intro').textContent(), 'Thank you for setting your preferences for all 4 events.');
+        assert.equal(await progressPreview.locator('#home-deadline').isVisible(), false);
+        assert.equal(await progressPreview.locator('.event-reply-deadline.preferences-saved').count(), 4);
+      }
+    }
+  }
+  await progressPreview.close();
   await page.goto(details.home);
   await page.getByText('Hello Browser.', {exact:false}).waitFor();
   assert.doesNotMatch(await page.title(), /STALE STATIC COPY/);

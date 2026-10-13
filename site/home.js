@@ -342,9 +342,14 @@ function card(event, invited) {
   return {node, disclosure, status, link, metadata, calendar, summary, programme, agenda, deadline};
 }
 
-function renderDeadline(entry, poll, finalized) {
+function renderDeadline(entry, poll, finalized, completed = false) {
   entry.deadline.hidden = Boolean(finalized);
+  entry.deadline.classList.toggle('preferences-saved', completed);
   if (finalized) return;
+  if (completed) {
+    entry.deadline.textContent = 'Thank you for setting your preferences.';
+    return;
+  }
   const time = element('time', deadlineLabel(poll)); time.dateTime = poll.deadline;
   entry.deadline.replaceChildren('Please set your preferences by ', time, '.');
 }
@@ -376,7 +381,7 @@ function renderCard(entry, invitation, onSave, openDate = null, saved = false) {
     entry.node.querySelector('.event-card-bottom').append(manage);
   }
   const finalEvent = invitation.state.final_event;
-  renderDeadline(entry, invitation.poll, finalEvent);
+  renderDeadline(entry, invitation.poll, finalEvent, responseComplete(invitation));
   if (invitation.state.final_event) {
     entry.summary.replaceChildren(element('p', slotLabel(finalEvent, invitation.poll.timezone, invitation.poll.daily_hours)));
     entry.summary.hidden = false;
@@ -399,16 +404,34 @@ function renderCard(entry, invitation, onSave, openDate = null, saved = false) {
 
 function renderProgress(programme) {
   renderPresentationNudge($('presentation-nudge'), programme, token);
-  const first = programme.find(entry => entry.event.id === 'seminar-1')?.invitation;
-  $('home-deadline').hidden = !first || Boolean(first.state.final_event);
-  if (first && !first.state.final_event) {
-    const time = element('time', deadlineLabel(first.poll)); time.dateTime = first.poll.deadline;
-    $('home-deadline').replaceChildren(' For the first seminar, please set your preferences by ', time, '.');
+  const valid = programme.filter(entry => entry.invitation);
+  const next = nextEvent(programme);
+  const completed = valid.find(entry => responseComplete(entry.invitation));
+  const month = entry => {
+    const poll = entry.invitation.poll;
+    const start = Math.min(...poll.slots.map(slot => Date.parse(slot.start)));
+    return new Intl.DateTimeFormat('en-GB', {timeZone:poll.timezone, month:'long', year:'numeric'}).format(new Date(start));
+  };
+  const allAnswered = valid.length === programme.length && valid.every(entry => responseComplete(entry.invitation));
+  $('home-intro').textContent = allAnswered
+    ? `Thank you for setting your preferences for all ${programme.length} events.`
+    : completed ? `Thank you for setting your preferences for ${completed === nextSeminar(programme) ? 'the next seminar' : completed.event.name} in ${month(completed)}.`
+    : 'Please enter your availability for the next D3 seminars.';
+  $('home-intro').classList.toggle('preferences-saved', Boolean(completed));
+  $('home-deadline').hidden = !next;
+  $('home-deadline').replaceChildren();
+  if (next) {
+    const link = element('a', `${next.event.name} in ${month(next)}`); link.href = eventHref(next.event.id, token);
+    $('home-deadline').append(completed ? ' You can already set your preferences for ' : ' Please set your preferences for ', link);
+    if (!completed) {
+      const poll = next.invitation.poll;
+      const time = element('time', deadlineLabel(poll)); time.dateTime = poll.deadline;
+      $('home-deadline').append(' by ', time);
+    }
+    $('home-deadline').append('.');
   }
   $('journey-progress').textContent = programmeProgress(programme);
   $('programme-progress').hidden = false;
-  const valid = programme.filter(entry => entry.invitation);
-  const next = nextEvent(programme);
   $('progress-steps').replaceChildren();
   $('continue-link').hidden = !next;
   $('progress-title').textContent = next ? 'Confirm your availability'
