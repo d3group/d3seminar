@@ -1,12 +1,26 @@
 import {apiFetch, loadConfig, apiUrl, serviceNotice} from './api.js';
-import {$, selectEvent, slotLabel, durationLabel, deadlineLabel, dailyHoursLabel, preserveInvitationLinks, eventHref, answeredCount, eventFinished, nextEvent, loadProgramme, programmeProgress, showSavedResponse, renderProgramme} from './shared.js';
+import {$, element, selectEvent, durationLabel, dailyHoursLabel, preserveInvitationLinks, eventHref, answeredCount, eventFinished, nextEvent, loadProgramme, programmeProgress, showSavedResponse, renderProgramme} from './shared.js';
 preserveInvitationLinks(new URLSearchParams(location.hash.slice(1)).get('token'));
 let config, poll, token, programme = [], saving = false;
 const eventId = new URLSearchParams(location.search).get('event') || 'seminar-1';
 const choices = [['available', 'Available'], ['unavailable', 'Unavailable']];
-const fmt = (value, options) => new Intl.DateTimeFormat('en-GB', {timeZone:poll.timezone, ...options}).format(new Date(value));
-const date = value => fmt(value, {weekday:'short', day:'numeric', month:'short', year:'numeric'});
-const time = value => fmt(value, {hour:'2-digit', minute:'2-digit'});
+const fmt = (value, options) => new Intl.DateTimeFormat('de-DE', {timeZone:poll.timezone, ...options}).format(new Date(value));
+const date = value => fmt(value, {day:'2-digit', month:'2-digit', year:'numeric'});
+const time = value => fmt(value, {hour:'2-digit', minute:'2-digit', hourCycle:'h23'});
+
+function optionDates(slot) {
+  return date(slot.start) === date(slot.end) ? [date(slot.start)] : [date(slot.start), date(slot.end)];
+}
+
+function optionHours(slot) {
+  const hours = slot.daily_hours || poll.daily_hours;
+  if (!hours) return [`${time(slot.start)}–${time(slot.end)} Uhr`];
+  return [`${hours.start}–${hours.end} Uhr`, ...(hours.last_day_end ? [`Final day: ${hours.start}–${hours.last_day_end} Uhr`] : [])];
+}
+
+function optionLabel(slot) {
+  return `${optionDates(slot).join(' – ')} · ${optionHours(slot).join(' · ')}`;
+}
 
 function notice(message, error = false) {
   $('notice').textContent = message;
@@ -92,25 +106,47 @@ async function saveResponse(event) {
 
 function renderPoll(answers = {}) {
   $('poll-meta').textContent = `${durationLabel(poll)} · All times in ${poll.timezone}`;
-  $('poll-deadline').textContent = `Please set your preferences by ${deadlineLabel(poll)}.`;
+  $('poll-deadline').textContent = `Please set your preferences by ${fmt(poll.deadline, {weekday:'long'})}, ${date(poll.deadline)}.`;
   $('poll-options').replaceChildren();
   for (const slot of poll.slots) {
     const fieldset = document.createElement('fieldset');
     fieldset.className = 'poll-option';
     fieldset.dataset.slot = slot.id;
     const legend = document.createElement('legend');
-    legend.textContent = slotLabel(slot, poll.timezone, poll.daily_hours);
+    legend.className = 'sr-only';
+    legend.textContent = optionLabel(slot);
     fieldset.append(legend);
+    const heading = element('div', '', 'poll-option-heading');
+    heading.setAttribute('aria-hidden', 'true');
+    const dates = optionDates(slot);
+    heading.append(element('span', fmt(slot.start, {weekday:'long'}), 'poll-option-weekday'));
+    const dateRow = element('div', '', 'poll-option-date-row');
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('class', 'poll-option-calendar');
+    icon.setAttribute('aria-hidden', 'true'); icon.setAttribute('focusable', 'false');
+    const outline = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    outline.setAttribute('d', 'M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM7 2v4m10-4v4M3 10h18M7 14h2m3 0h2m3 0h1M7 18h2m3 0h2');
+    icon.append(outline);
+    const dateText = element('div', '');
+    dates.forEach((value, index) => dateText.append(element('strong', (index ? '– ' : '') + value, 'poll-option-date')));
+    dateRow.append(icon, dateText); heading.append(dateRow);
+    optionHours(slot).forEach(value => heading.append(element('span', value, 'poll-option-time')));
+    fieldset.append(heading);
     const row = document.createElement('div');
     row.className = 'availability-choices';
     for (const [value, title] of choices) {
       const label = document.createElement('label');
       label.className = 'availability-choice';
+      label.title = title;
       const input = document.createElement('input');
       input.type = 'radio'; input.name = `answer:${slot.id}`; input.value = value;
+      input.setAttribute('aria-label', title);
       input.checked = answers[slot.id] === value;
       const text = document.createElement('span'); text.textContent = title;
-      label.append(input, text); row.append(label);
+      text.className = 'sr-only';
+      const icon = document.createElement('span'); icon.className = 'availability-icon';
+      icon.textContent = value === 'available' ? '✓' : '✗'; icon.setAttribute('aria-hidden', 'true');
+      label.append(input, icon, text); row.append(label);
     }
     const clear = document.createElement('button');
     clear.type = 'button'; clear.className = 'clear-answer'; clear.textContent = 'Clear';
@@ -153,8 +189,7 @@ async function start() {
   }
   if (config.kind === 'onsite') {
     $('poll-help').textContent = `Each option covers ${config.duration_days} consecutive dates, ${dailyHoursLabel(config.daily_hours)}. Mark Available if you can attend the whole meeting. If you can attend only part, choose Unavailable and leave a note below.`;
-    $('all-available').textContent = 'All onsite options work';
-    $('all-unavailable').textContent = 'None of these work';
+    $('all-available-label').textContent = 'All onsite options work';
   }
   const home = './' + (token ? '#' + new URLSearchParams({token}) : '');
   $('back-home').href = home; document.querySelector('.brand').href = home;
@@ -186,7 +221,7 @@ async function start() {
     $('greeting').textContent = `Hello ${invitation.name}. We found a time everyone can attend.`;
     const event = state.final_event;
     $('final-session').hidden = false;
-    $('final-time').textContent = `${slotLabel(event, poll.timezone)} · ${poll.timezone}`;
+    $('final-time').textContent = `${optionLabel(event)} · ${poll.timezone}`;
     $('session-location').textContent = event.location;
     renderProgramme($('final-programme'), state.programme);
     $('calendar').hidden = false;

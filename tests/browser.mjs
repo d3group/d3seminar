@@ -327,7 +327,7 @@ try {
   await page.getByText('Each option covers 2 consecutive dates, 09:00–17:00 each day.', {exact:false}).waitFor();
   assert.equal(await page.locator('input:checked').count(), 0);
   assert.equal(await page.getByLabel('If necessary', {exact:true}).count(), 0);
-  assert.match(await page.locator('.poll-option legend').first().textContent(), /2 Nov.*3 Nov.*09:00–17:00 each day/);
+  assert.match(await page.locator('.poll-option legend').first().textContent(), /02\.11\.2026.*03\.11\.2026.*09:00–17:00 Uhr/);
   await first().getByLabel('Unavailable').check();
   await save();
   await page.getByText('Your availability is saved for 1 of 3 options.', {exact:false}).waitFor();

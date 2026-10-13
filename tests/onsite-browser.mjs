@@ -74,7 +74,7 @@ try {
   await page.goto(details.onsite);
   await page.locator('.poll-option').first().waitFor();
   assert.match(await page.locator('#poll-help').textContent(), /final day 09:00–13:00/);
-  assert.match(await page.locator('.poll-option').first().textContent(), /final day 09:00–13:00/);
+  assert.match(await page.locator('.poll-option').first().textContent(), /Final day: 09:00–13:00 Uhr/);
   const token = 'T'.repeat(43);
   const invite = await (await page.request.post(details.base + 'api/invitation', {data:{token, event_id:'onsite'}})).json();
   assert.deepEqual(invite.answers, {'option-12':'available'});

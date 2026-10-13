@@ -54,6 +54,55 @@ class PresentationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             presentations.material(self.store, TOKEN, uploaded['files']['slides']['id'])
 
+    def test_joint_presenters_share_editing_and_uploads_but_not_with_other_attendees(self):
+        owner_id, partner_id = self.people[0]['id'], self.people[1]['id']
+        saved = presentations.save(self.store, TOKEN, dict(self.talk, co_presenter_ids=[partner_id], visibility='public'))
+        invitation = self.store.invitation('B'*43, include_presentations=True)
+        self.assertEqual(invitation['presentation'], {})
+        self.assertEqual(invitation['presentation_contribution']['title'], self.talk['title'])
+        self.assertEqual(invitation['editable_presentations'][0]['participant_id'], owner_id)
+        self.assertTrue(invitation['presentations'][0]['mine'])
+        self.assertEqual([p['name'] for p in invitation['presentations'][0]['presenters']], ['Ada', 'Bea'])
+        with self.store.session() as session:
+            self.assertEqual(presentations.listing(self.store, session), [{'name':'Ada & Bea'}])
+        for operation in (
+            lambda: presentations.save(self.store, 'C'*43, self.talk, saved['version'], participant_id=owner_id),
+            lambda: presentations.save(self.store, 'C'*43, {}, saved['version'], remove=True, participant_id=owner_id),
+            lambda: presentations.upload(self.store, 'C'*43, 'slides', 'talk.pdf', b'%PDF-1.4', saved['version'], participant_id=owner_id),
+        ):
+            with self.assertRaisesRegex(ValueError, 'Only listed presenters'):
+                operation()
+        updated = presentations.save(self.store, 'B'*43, dict(self.talk, title='Joint update'), saved['version'], participant_id=owner_id)
+        self.assertEqual(updated['co_presenter_ids'], [partner_id])
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            presentations.save(self.store, TOKEN, self.talk, saved['version'])
+        uploaded = presentations.upload(self.store, 'B'*43, 'slides', 'talk.pdf', b'%PDF-1.4', updated['version'], participant_id=owner_id)
+        self.assertEqual(self.store.invitation(TOKEN)['presentation']['files'], uploaded['files'])
+        removed = presentations.save(self.store, TOKEN, dict(self.talk, co_presenter_ids=[]), uploaded['version'])
+        self.assertEqual(self.store.invitation('B'*43, include_presentations=True)['editable_presentations'], [])
+        with self.assertRaisesRegex(ValueError, 'Only listed presenters'):
+            presentations.save(self.store, 'B'*43, self.talk, removed['version'], participant_id=owner_id)
+
+    def test_joint_presenters_are_validated_and_move_together(self):
+        owner_id, partner_id = self.people[0]['id'], self.people[1]['id']
+        for ids in (None, 'Bea', [None], [{}], [partner_id, partner_id], [owner_id], ['unknown']):
+            with self.subTest(ids=ids), self.assertRaisesRegex(ValueError, 'co-presenters'):
+                presentations.save(self.store, TOKEN, dict(self.talk, co_presenter_ids=ids))
+        saved = presentations.save(self.store, TOKEN, dict(self.talk, co_presenter_ids=[partner_id]))
+        destination = Store(self.store.database.parent / 'next.sqlite3')
+        destination.sync([self.people[0]])
+        version = self.store.invitation(TOKEN, include_presentations=True)['presentation_order_version']
+        with self.assertRaisesRegex(ValueError, 'co-presenter'):
+            presentations.move(self.store, destination, owner_id, version)
+        self.assertEqual(self.store.invitation(TOKEN)['presentation']['version'], saved['version'])
+        destination.sync(self.people)
+        presentations.move(self.store, destination, owner_id, version)
+        self.assertEqual(self.store.invitation('B'*43)['presentation_contribution'], {})
+        joint = destination.invitation('B'*43, include_presentations=True)['editable_presentations'][0]
+        self.assertEqual(joint['participant_id'], owner_id)
+        presentations.save(destination, 'B'*43, {}, joint['version'], remove=True, participant_id=owner_id)
+        self.assertEqual(destination.invitation(TOKEN)['presentation'], {})
+
     def test_presentations_survive_date_changes_and_can_be_updated_after_finalization(self):
         self.store.respond(dict(RESPONSE, comment='Keep availability separate.'))
         saved = presentations.save(self.store, TOKEN, self.talk)

@@ -92,6 +92,14 @@ class MailerTests(unittest.TestCase):
         claim = mailer.api(self.settings, 'claim_mail', event_id='seminar-1', kind='present', participant_id=row['id'], preview=row['preview'], message_id='<test@example.com>')
         self.assertFalse(claim['claimed'])
 
+    def test_joint_proposal_counts_for_each_presenter_in_email_eligibility(self):
+        later = self.server.d3_app.stores['seminar-2']
+        self.assertEqual([m['name'] for m in self.preview('present')['messages']], ['Ada', 'Bea'])
+        saved = presentations.save(later, 'A'*43, dict(title='Joint provisional topic', co_presenter_ids=['b'*24]))
+        self.assertEqual(self.preview('present')['messages'], [])
+        presentations.save(later, 'A'*43, dict(title='Now a solo topic', co_presenter_ids=[]), saved['version'])
+        self.assertEqual([m['name'] for m in self.preview('present')['messages']], ['Bea'])
+
     def test_local_preview_does_not_send_and_smtp_failure_cannot_duplicate_mail(self):
         with patch.object(mailer.smtplib, 'SMTP_SSL') as smtp, contextlib.redirect_stdout(io.StringIO()):
             mailer.run(self.settings, self.root/'local-mail', 'invite')

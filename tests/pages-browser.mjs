@@ -254,7 +254,7 @@ try {
     presentation:{title:'Research update ' + token, presentation_minutes:20, questions_minutes:10}});
   await page.goto(details.base + 'agenda.html?present=seminar-2#token=' + 'T'.repeat(43));
   const orderedRows = page.locator('[data-event="seminar-2"] .talk-row');
-  const runningOrder = () => orderedRows.evaluateAll(rows => rows.map(row => [row.querySelector('th > span').textContent, row.querySelector('.talk-timeslot strong').textContent]));
+  const runningOrder = () => orderedRows.evaluateAll(rows => rows.map(row => [row.querySelector('.talk-presenter > span').textContent, row.querySelector('.talk-timeslot strong').textContent]));
   await orderedRows.nth(1).waitFor({state:'attached'});
   const beforeSave = await runningOrder();
   assert.deepEqual(beforeSave, [['Zoe', '14:00–14:30'], ['Änne', '14:30–15:00']]);

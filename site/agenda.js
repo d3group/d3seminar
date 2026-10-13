@@ -3,7 +3,7 @@ import {$, element, selectEvent, slotLabel, eventHref, preserveInvitationLinks, 
 
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
 preserveInvitationLinks(token);
-let config, entries = [], editingId, saving = false;
+let config, entries = [], editingId, editingOwner, saving = false;
 const drafts = new Map();
 const expandedEvents = new Map();
 const requestedEvent = new URLSearchParams(location.search).get('event');
@@ -34,8 +34,7 @@ function setStatus(message, kind = '') {
   status.classList.toggle('success', kind === 'success'); status.classList.toggle('error', kind === 'error');
 }
 
-function showSaved(entry, removed) {
-  const talk = entry.invitation.presentation;
+function showSaved(entry, removed, talk = currentTalk()) {
   const heading = removed ? 'Proposal withdrawn.' : talk.status === 'placeholder' ? 'Your placeholder is saved.' : 'Your talk is saved.';
   setStatus(heading, 'success');
   const status = $('presentation-status');
@@ -120,10 +119,14 @@ function talkTable(event, talks, finalEvent, organizer) {
     }
     const name = element('th', ''); name.scope = 'row'; name.dataset.label = 'Presenter';
     row.dataset.presenter = talk.participant_id;
-    name.append(element('span', talk.name));
-    if (talk.email) {
-      const email = element('a', talk.email, 'talk-presenter-email'); email.href = 'mailto:' + encodeURIComponent(talk.email);
-      name.append(email);
+    for (const presenter of talk.presenters || [talk]) {
+      const person = element('div', '', 'talk-presenter');
+      person.append(element('span', presenter.name));
+      if (presenter.email) {
+        const email = element('a', presenter.email, 'talk-presenter-email'); email.href = 'mailto:' + encodeURIComponent(presenter.email);
+        person.append(email);
+      }
+      name.append(person);
     }
     if (organizer) {
       const controls = element('div', '', 'talk-order-controls');
@@ -193,7 +196,7 @@ async function moveToEvent(eventId, participantId, destinationId) {
   const destination = entries.find(entry => entry.event.id === destinationId);
   rememberDraft();
   const ownTalk = entry.invitation.presentations.find(talk => talk.participant_id === participantId)?.mine;
-  if (ownTalk && drafts.has(eventId)) {
+  if (ownTalk && drafts.has(`${eventId}/${participantId}`)) {
     const notice = $('agenda-notice'); notice.hidden = false; notice.classList.add('error');
     notice.textContent = 'Save your draft before moving this talk to another event.';
     return;
@@ -242,7 +245,7 @@ function renderEvent(event, invitation, error, publicTalks = [], open = false, p
   link.href = eventHref(event.id, error ? null : token);
   link.setAttribute('aria-label', `${link.textContent} for ${event.name}`); actions.append(link);
   if (canPresent(invitation)) {
-    const edit = element('button', invitation.presentation?.title ? 'Edit your talk' : 'Add a talk', 'secondary');
+    const edit = element('button', invitation.presentation?.title || invitation.editable_presentations?.length ? 'Edit your talk' : 'Add a talk', 'secondary');
     edit.type = 'button'; edit.dataset.present = event.id; edit.disabled = saving;
     edit.addEventListener('click', () => openEditor(event.id)); actions.append(edit);
   }
@@ -282,6 +285,34 @@ function renderAgendas() {
 
 function selectedEntry() { return entries.find(entry => entry.event.id === $('presentation-event').value); }
 
+function currentTalk() {
+  const invitation = entries.find(entry => entry.event.id === editingId)?.invitation;
+  return invitation?.editable_presentations?.find(talk => talk.participant_id === editingOwner)
+    || (editingOwner === invitation?.participant_id ? invitation?.presentation : null) || {};
+}
+
+function draftKey() { return `${editingId}/${editingOwner}`; }
+
+function readCoPresenters() {
+  return [...document.querySelectorAll('#co-presenter-options input:checked')].map(input => input.value);
+}
+
+function chooseTalk(ownerId) {
+  const invitation = selectedEntry().invitation;
+  const talks = invitation.editable_presentations || [];
+  const ownId = invitation.participant_id;
+  const chosen = ownerId || (invitation.presentation?.title ? ownId : talks[0]?.participant_id) || ownId;
+  const options = talks.map(talk => ({id:talk.participant_id, title:talk.title}));
+  if (!talks.some(talk => talk.participant_id === ownId)) options.push({id:ownId, title:'Add a new talk'});
+  $('presentation-talk').replaceChildren();
+  for (const item of options) {
+    const option = element('option', item.title); option.value = item.id; $('presentation-talk').append(option);
+  }
+  $('presentation-talk').value = chosen;
+  $('talk-choice').hidden = options.length < 2;
+  editingOwner = chosen;
+}
+
 function visibility() { return document.querySelector('input[name="visibility"]:checked').value; }
 
 function updateVisibilityNote() {
@@ -294,12 +325,12 @@ function updateVisibilityNote() {
     return;
   }
   $('visibility-note').textContent = visibility() === 'public'
-    ? 'Only your name will appear publicly. Your title, abstract and materials stay within the group. Choose Public only for mature topics nearing publication.'
+    ? 'Only presenter names will appear publicly. Your title, abstract and materials stay within the group. Choose Public only for mature topics nearing publication.'
     : 'Only invited participants can see your talk and materials.';
 }
 
 function currentFiles() {
-  const talk = selectedEntry().invitation.presentation || {};
+  const talk = currentTalk();
   for (const kind of ['explainer', 'slides']) {
     $(kind + '-current').textContent = talk.files?.[kind] ? 'Uploaded: ' + talk.files[kind].name : '';
   }
@@ -309,20 +340,30 @@ function currentFiles() {
 
 function rememberDraft() {
   if (!editingId) return;
-  const draft = {title:$('talk-title').value, abstract:$('talk-abstract').value, status:$('talk-placeholder').checked ? 'placeholder' : 'talk', visibility:visibility(), ...readTiming(),
+  const draft = {title:$('talk-title').value, abstract:$('talk-abstract').value, co_presenter_ids:readCoPresenters(), status:$('talk-placeholder').checked ? 'placeholder' : 'talk', visibility:visibility(), ...readTiming(),
     explainer_url:$('explainer-url').value, slides_url:$('slides-url').value,
     uploads:Object.fromEntries(['explainer', 'slides'].map(kind => [kind, [...$(kind + '-file').files]]))};
-  const saved = entries.find(entry => entry.event.id === editingId).invitation.presentation || {};
+  const saved = currentTalk();
   const changed = ['title', 'abstract', 'explainer_url', 'slides_url'].some(key => draft[key] !== (saved[key] || ''));
   const timingChanged = ['presentation_minutes', 'questions_minutes'].some(key => draft[key] !== (saved[key] ?? null));
-  if (changed || timingChanged || draft.status !== (saved.status || 'talk') || draft.visibility !== (saved.visibility || 'internal') || Object.values(draft.uploads).some(files => files.length)) drafts.set(editingId, draft);
-  else drafts.delete(editingId);
+  const presentersChanged = JSON.stringify(draft.co_presenter_ids) !== JSON.stringify(saved.co_presenter_ids || []);
+  if (changed || timingChanged || presentersChanged || draft.status !== (saved.status || 'talk') || draft.visibility !== (saved.visibility || 'internal') || Object.values(draft.uploads).some(files => files.length)) drafts.set(draftKey(), draft);
+  else drafts.delete(draftKey());
 }
 
 function loadEditor() {
   editingId = selectedEntry().event.id;
-  const draft = drafts.get(editingId);
-  const talk = draft || selectedEntry().invitation.presentation || {};
+  const draft = drafts.get(draftKey());
+  const talk = draft || currentTalk();
+  const people = selectedEntry().invitation.presenter_options || [];
+  $('talk-submitter').textContent = people.find(person => person.id === editingOwner)?.name || selectedEntry().invitation.name;
+  $('co-presenter-options').replaceChildren();
+  for (const person of people.filter(person => person.id !== editingOwner)) {
+    const label = element('label', '', 'consent');
+    const input = document.createElement('input'); input.type = 'checkbox'; input.value = person.id;
+    input.checked = (talk.co_presenter_ids || []).includes(person.id);
+    label.append(input, document.createTextNode(person.name)); $('co-presenter-options').append(label);
+  }
   $('talk-title').value = talk.title || ''; $('talk-abstract').value = talk.abstract || '';
   $('talk-placeholder').checked = talk.status === 'placeholder';
   $('presentation-minutes').value = talk.presentation_minutes ?? ''; $('questions-minutes').value = talk.questions_minutes ?? '';
@@ -342,7 +383,7 @@ function loadEditor() {
 function openEditor(eventId) {
   if (saving || !entries.some(entry => entry.event.id === eventId && canPresent(entry.invitation))) return;
   expandedEvents.set(eventId, true);
-  rememberDraft(); $('presentation-event').value = eventId; loadEditor();
+  rememberDraft(); $('presentation-event').value = eventId; chooseTalk(); loadEditor();
   $('presentation-editor').hidden = false; $('presentation-nudge').hidden = true;
   const url = new URL(location.href); url.searchParams.set('present', eventId); history.replaceState(null, '', url);
   $('editor-title').focus();
@@ -360,6 +401,8 @@ function closeEditor() {
 function updatePresentation(entry, saved) {
   expandedEvents.set(entry.event.id, true);
   entry.invitation.presentation = saved.presentation;
+  entry.invitation.editable_presentations = saved.editable_presentations;
+  entry.invitation.presentation_contribution = saved.presentation_contribution;
   entry.invitation.presentations = saved.presentations;
   entry.invitation.presentation_order_version = saved.presentation_order_version;
   entry.invitation.is_organizer = saved.is_organizer;
@@ -375,10 +418,13 @@ async function result(response) {
 async function savePresentation(remove = false) {
   if (saving) return;
   const entry = selectedEntry();
-  const proposal = {title:$('talk-title').value, abstract:$('talk-abstract').value, status:$('talk-placeholder').checked ? 'placeholder' : 'talk', visibility:visibility(), ...readTiming(),
+  const proposal = {title:$('talk-title').value, abstract:$('talk-abstract').value, co_presenter_ids:readCoPresenters(), status:$('talk-placeholder').checked ? 'placeholder' : 'talk', visibility:visibility(), ...readTiming(),
     explainer_url:$('explainer-url').value, slides_url:$('slides-url').value};
   const files = ['explainer', 'slides'].map(kind => [kind, $(kind + '-file').files[0]]).filter(([, file]) => file);
   const status = $('presentation-status');
+  if (!remove && files.length && editingOwner !== entry.invitation.participant_id && !proposal.co_presenter_ids.includes(entry.invitation.participant_id)) {
+    setStatus('Upload your materials before removing yourself as a presenter.', 'error'); return;
+  }
   if (!remove && files.some(([, file]) => file.size > 20 * 1024 * 1024)) {
     setStatus('Choose files of at most 20 MB each.', 'error'); return;
   }
@@ -390,20 +436,27 @@ async function savePresentation(remove = false) {
   let saved = false;
   try {
     const response = await apiFetch('presentation', {method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({token, event_id:entry.event.id, version:entry.invitation.presentation?.version || '', presentation:proposal, remove})});
+      body:JSON.stringify({token, event_id:entry.event.id, participant_id:editingOwner, version:currentTalk().version || '', presentation:proposal, remove})});
     updatePresentation(entry, await result(response)); saved = true;
     if (!remove) {
       for (const [kind, file] of files) {
         const response = await apiFetch('presentation-upload', {method:'POST', body:file, headers:{
           'X-Invitation-Token':token, 'X-Event-Id':entry.event.id, 'X-Material-Kind':kind,
-          'X-File-Name':encodeURIComponent(file.name), 'X-Presentation-Version':entry.invitation.presentation.version
+          'X-File-Name':encodeURIComponent(file.name), 'X-Presentation-Version':currentTalk().version, 'X-Presentation-Owner':editingOwner
         }});
         updatePresentation(entry, await result(response)); $(kind + '-file').value = '';
       }
     }
-    drafts.delete(entry.event.id);
-    if (remove) loadEditor();
-    showSaved(entry, remove);
+    drafts.delete(draftKey());
+    if (remove) { chooseTalk(); loadEditor(); }
+    showSaved(entry, remove, proposal);
+    if (!remove && !currentTalk().version) {
+      editingId = null;
+      $('presentation-editor').hidden = true;
+      renderAgendas();
+      $('agenda-notice').hidden = false;
+      $('agenda-notice').textContent = 'Talk saved. You are no longer listed as a presenter for this talk.';
+    } else chooseTalk(editingOwner);
   } catch (error) {
     setStatus((saved ? 'Talk saved. Materials could not all be uploaded: ' : remove ? 'Your proposal could not be withdrawn. ' : 'Your talk could not be saved. ') + error.message, 'error');
     status.focus({preventScroll:true}); status.scrollIntoView({block:'nearest'});
@@ -429,6 +482,9 @@ function setupEditor() {
     }
   }
   $('presentation-event').addEventListener('change', () => openEditor($('presentation-event').value));
+  $('presentation-talk').addEventListener('change', () => {
+    rememberDraft(); editingOwner = $('presentation-talk').value; loadEditor();
+  });
   $('close-editor').addEventListener('click', closeEditor);
   document.querySelectorAll('input[name="visibility"]').forEach(input => input.addEventListener('change', updateVisibilityNote));
   $('talk-placeholder').addEventListener('change', updateVisibilityNote);

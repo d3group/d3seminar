@@ -293,8 +293,9 @@ export async function loadProgramme(config, token, includeVotes = false, include
 export function presentationProgress(entries) {
   const student = entries.filter(entry => entry.invitation?.role === 'student');
   if (!student.length) return null;
-  const proposed = entry => Boolean(entry.invitation.presentation?.title);
-  const detailsPending = entry => proposed(entry) && !entry.invitation.presentation.abstract;
+  const contribution = entry => entry.invitation.presentation?.title ? entry.invitation.presentation : entry.invitation.presentation_contribution;
+  const proposed = entry => Boolean(contribution(entry)?.title);
+  const detailsPending = entry => proposed(entry) && !contribution(entry).abstract;
   const seminars = student.filter(entry => entry.event.kind === 'seminar');
   const onsite = student.find(entry => entry.event.kind === 'onsite');
   const seminar = seminars.some(proposed), onsiteDone = Boolean(onsite && proposed(onsite));

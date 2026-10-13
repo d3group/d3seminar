@@ -181,6 +181,10 @@ h3 { font-size: 18px; line-height: 1.4; font-weight: 600; }
 .talk-table tbody th { font-weight: 500; }
 .talk-table tbody td, .talk-table tbody th { border-bottom: 1px solid var(--line); }
 .talk-presenter-email { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.talk-presenter + .talk-presenter { margin-top: 14px; }
+.co-presenters { margin: 18px 0; }
+.co-presenters summary { cursor: pointer; }
+#co-presenter-options { max-height: 240px; overflow-y: auto; margin-top: 12px; }
 .talk-order-controls { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .talk-order-controls button { min-width: 32px; min-height: 32px; padding: 2px 8px; }
 .talk-order-controls select { width: 100%; min-width: 0; margin: 0; padding: 6px; font-size: 12px; }
@@ -409,18 +413,31 @@ footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8p
 .poll-meta { font-size: 14px; font-weight: 500; margin-bottom: 6px; }
 .poll-deadline { font-size: 13px; color: var(--muted); margin-bottom: 21px; }
 .poll-help { font-size: 13px; color: var(--muted); line-height: 1.7; margin-bottom: 12px; }
-.bulk-actions { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-bottom: 22px; }
+.bulk-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 22px; }
+.bulk-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 10px; flex: 1 1 180px; min-height: 48px; padding: 10px 14px; border: 2px solid currentColor; border-radius: 4px; background: #fff; font-size: 13px; font-weight: 600; }
+.bulk-actions #all-available { color: #315e48; }
+.bulk-actions #all-unavailable { color: #8e4033; }
+.bulk-actions button:hover:not(:disabled) { background: var(--soft); }
+.bulk-action-icon { font-size: 22px; font-weight: 800; line-height: 1; }
 .text-button, .clear-answer, .calendar-link { border: 0; background: none; color: var(--link); padding: 5px 0; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
 fieldset { border: 0; padding: 0; min-width: 0; }
-.poll-option { margin: 0 0 17px; }
-.poll-option legend { font-size: 13px; font-weight: 500; line-height: 1.6; margin-bottom: 9px; width: 100%; }
+#poll-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px 16px; margin-bottom: 22px; }
+.poll-option { margin: 0; padding: 14px 12px 10px; border: 1px solid #aab6c2; border-radius: 5px; background: #fff; }
+.poll-option-heading { margin-bottom: 14px; }
+.poll-option-date-row { display: flex; align-items: flex-start; gap: 8px; }
+.poll-option-calendar { width: 20px; height: 20px; margin-top: 3px; flex-shrink: 0; fill: none; stroke: var(--link); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.poll-option-weekday { display: block; color: var(--muted); font-size: 12px; margin-bottom: 3px; }
+.poll-option-date { display: block; color: var(--link); font-size: 21px; font-weight: 700; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.poll-option-time { display: block; font-size: 14px; font-weight: 600; margin-top: 7px; line-height: 1.5; font-variant-numeric: tabular-nums; }
 .availability-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
-.availability-choice { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; padding: 8px 7px; border: 1px solid var(--line); border-radius: 3px; font-size: 12px; cursor: pointer; }
-.availability-choice input { margin: 0; width: 14px; height: 14px; accent-color: var(--link); flex-shrink: 0; }
-.availability-choice:has(input[value="available"]:checked) { color: #315e48; border-color: #315e48; }
-.availability-choice input[value="available"] { accent-color: #315e48; }
-.availability-choice input[value="unavailable"] { accent-color: #9d4538; }
-.availability-choice:has(input[value="unavailable"]:checked) { color: #9d4538; border-color: #9d4538; }
+.availability-choice { position: relative; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; padding: 8px 7px; border: 1px solid var(--line); border-radius: 3px; font-size: 12px; cursor: pointer; }
+.availability-choice input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.availability-icon { font-size: 22px; font-weight: 800; line-height: 1; }
+.availability-choice:has(input[value="available"]) { color: #315e48; border-color: #315e48; }
+.availability-choice:has(input[value="unavailable"]) { color: #8e4033; border-color: #8e4033; }
+.availability-choice:has(input[value="available"]:checked) { background: #315e48; color: #fff; }
+.availability-choice:has(input[value="unavailable"]:checked) { background: #8e4033; color: #fff; }
+.availability-choice:has(input:focus-visible) { outline: 2px solid var(--link); outline-offset: 3px; }
 .clear-answer { display: block; margin: 2px 0 0 auto; font-size: 11px; }
 .answer-progress { font-size: 12px; color: var(--muted); margin-bottom: 22px; }
 .notes-label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 8px; }
@@ -478,6 +495,7 @@ tbody tr:last-child > * { border-bottom: 0; }
 td small, th small { display: block; color: var(--muted); font-size: 11px; margin-top: 5px; }
 td.available { color: #315e48; }
 td.unavailable { color: #8e4033; }
+.response-mark { font-size: 22px; font-weight: 800; line-height: 1; }
 .unknown { color: var(--muted); }
 .slot-action { font-size: 12px; min-width: 116px; padding: 8px 10px; }
 .section-title { margin-top: 32px; }
@@ -492,6 +510,7 @@ td.unavailable { color: #8e4033; }
   .timeline-arrows button { width: 40px; height: 40px; }
 }
 @media (max-width: 850px) {
+  #poll-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .intro-grid { grid-template-columns: 185px minmax(0, 1fr); gap: 26px; }
   .response-card { padding: 22px; }
   .intro h1 { font-size: 26px; }
@@ -563,6 +582,7 @@ td.unavailable { color: #8e4033; }
   .programme-tabs a { min-height: 36px; font-size: 13px; }
 }
 @media (max-width: 380px) {
+  #poll-options { grid-template-columns: 1fr; }
   .availability-choice { flex-direction: column; gap: 6px; padding-block: 10px; }
   .response-card { padding: 18px; }
 }

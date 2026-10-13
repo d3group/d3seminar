@@ -75,7 +75,17 @@ function render() {
     const row = document.createElement('tr'), label = document.createElement('th');
     label.append(element('strong', person.name), element('small', person.email), element('small', {professor:'Professor', student:'PhD', member:'Member'}[person.role] || 'Role unassigned'), element('small', person.complete ? 'Complete' : 'Awaiting answers'));
     row.append(label);
-    for (const slot of d.slots) row.append(element('td', names[person.answers[slot.id]] || 'Awaiting reply', person.answers[slot.id] || 'unknown'));
+    for (const slot of d.slots) {
+      const answer = person.answers[slot.id];
+      const cell = element('td', '', answer || 'unknown');
+      if (names[answer]) {
+        const mark = element('strong', answer === 'available' ? '✓' : '✗', 'response-mark');
+        mark.setAttribute('aria-hidden', 'true');
+        cell.title = names[answer];
+        cell.append(mark, element('span', names[answer], 'sr-only'));
+      } else cell.textContent = 'Awaiting reply';
+      row.append(cell);
+    }
     const note = element('td', person.comment || 'No note');
     note.append(element('small', person.updated_at ? new Date(person.updated_at).toLocaleString('en-GB') : 'Not saved yet'));
     row.append(note); $('people-rows').append(row);

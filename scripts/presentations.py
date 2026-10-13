@@ -34,20 +34,34 @@ def ordered_people(people, state):
     return sorted(people, key=lambda person: (order.get(person['id'], len(order)), person['name'].casefold(), person['id']))
 
 
+def contribution(session, participant_id):
+    """Count a participant's own or joint contribution toward presentation progress."""
+    for owner_id, talk in session.execute(select(Presentation.participant_id, Presentation.data)):
+        if owner_id != participant_id and participant_id not in talk.get('co_presenter_ids', []):
+            continue
+        owner = session.get(Invitation, owner_id)
+        if owner and owner.data.get('active') and owner.data.get('role') in PRESENTER_ROLES:
+            return {key:talk.get(key, '') for key in ('title', 'abstract')}
+    return {}
+
+
 def listing(store, session, viewer_id=None):
     people = ordered_people(store.records(session), store.state(session))
+    eligible = {person['id']:person for person in people if person['active'] and person.get('role') in PRESENTER_ROLES}
     result = []
     for person in people:
         if not person['active'] or person.get('role') not in PRESENTER_ROLES:
             continue
         talk = own(session, person['id'])
         if talk and (viewer_id is not None or talk['visibility'] == 'public'):
-            row = dict(name=person['name'])
+            presenters = [person, *[eligible[key] for key in talk.get('co_presenter_ids', []) if key in eligible]]
+            row = dict(name=' & '.join(presenter['name'] for presenter in presenters))
             if viewer_id is not None:
+                row['presenters'] = [{key:presenter[key] for key in ('id', 'name', 'email')} for presenter in presenters]
                 row['participant_id'] = person['id']
                 row['email'] = person['email']
                 row.update({key:talk[key] for key in ('title', 'abstract', 'visibility', 'status', 'presentation_minutes', 'questions_minutes', 'explainer_url', 'slides_url', 'files')})
-                row['mine'] = person['id'] == viewer_id
+                row['mine'] = viewer_id in [presenter['id'] for presenter in presenters]
             result.append(row)
     return result
 
@@ -86,6 +100,16 @@ def move(store, destination, participant_id, version):
         if (not target or not target.get('active') or target.get('role') not in PRESENTER_ROLES
                 or target['token_hash'] != person['token_hash'] or target['email'] != person['email']):
             raise ValueError('The author needs a matching active invitation to the destination event.')
+        talk = own(session, participant_id)
+        for key in talk.get('co_presenter_ids', []):
+            source = session.get(Invitation, key)
+            raw = connection.exec_driver_sql('SELECT data FROM destination.invitations WHERE id=?', (key,)).scalar()
+            co_presenter = json.loads(raw) if raw else None
+            if (not source or not co_presenter or not co_presenter.get('active')
+                    or co_presenter.get('role') not in PRESENTER_ROLES
+                    or co_presenter['token_hash'] != source.data['token_hash']
+                    or co_presenter['email'] != source.data['email']):
+                raise ValueError('Every co-presenter needs a matching active invitation to the destination event.')
         if connection.exec_driver_sql('SELECT 1 FROM destination.presentations WHERE participant_id=?', (participant_id,)).scalar():
             raise ValueError('This author already has a talk in that event. Ask them to resolve it before moving this talk.')
         target_state = connection.exec_driver_sql('SELECT data FROM destination.poll_state WHERE id=1').scalar()
@@ -104,14 +128,21 @@ def move(store, destination, participant_id, version):
         store.write_state(session, state)
 
 
-def editable(store, session, token, version):
+def editable(store, session, token, version, participant_id=None):
     person = store.lookup(session, token)
     if person.get('role') not in PRESENTER_ROLES:
         raise ValueError('Your invitation does not allow presentation submissions. Please contact Aabhash.')
-    current = own(session, person['id'])
+    owner_id = participant_id or person['id']
+    if not isinstance(owner_id, str):
+        raise ValueError('Choose a valid talk.')
+    current = own(session, owner_id)
+    owner = session.get(Invitation, owner_id)
+    if (not owner or not owner.data.get('active') or owner.data.get('role') not in PRESENTER_ROLES
+            or (owner_id != person['id'] and person['id'] not in current.get('co_presenter_ids', []))):
+        raise ValueError('Only listed presenters can edit this talk.')
     if version != current.get('version', ''):
         raise ValueError('This presentation changed in another window. Reload the Agenda page before saving.')
-    return person, current
+    return owner.data, current
 
 
 def write(session, participant_id, proposal):
@@ -121,9 +152,9 @@ def write(session, participant_id, proposal):
     return own(session, participant_id)
 
 
-def save(store, token, proposal, version='', remove=False):
+def save(store, token, proposal, version='', remove=False, participant_id=None):
     with store.session(write=True) as session:
-        person, current = editable(store, session, token, version)
+        person, current = editable(store, session, token, version, participant_id)
         if remove:
             session.execute(delete(PresentationFile).where(PresentationFile.participant_id == person['id']))
             session.execute(delete(Presentation).where(Presentation.participant_id == person['id']))
@@ -131,6 +162,13 @@ def save(store, token, proposal, version='', remove=False):
         if not isinstance(proposal, dict):
             raise ValueError('Enter your presentation details.')
         data = {}
+        co_presenters = proposal.get('co_presenter_ids', current.get('co_presenter_ids', []))
+        eligible = {record['id'] for record in store.records(session)
+                    if record['active'] and record.get('role') in PRESENTER_ROLES and record['id'] != person['id']}
+        if (not isinstance(co_presenters, list) or any(not isinstance(key, str) for key in co_presenters)
+                or len(set(co_presenters)) != len(co_presenters) or not set(co_presenters) <= eligible):
+            raise ValueError('Choose co-presenters from the active attendees for this event.')
+        data['co_presenter_ids'] = co_presenters
         visibility = proposal.get('visibility', 'internal')
         if visibility not in ('internal', 'public'):
             raise ValueError('Choose Internal or Public for your talk.')
@@ -162,9 +200,9 @@ def save(store, token, proposal, version='', remove=False):
         return write(session, person['id'], data)
 
 
-def upload(store, token, kind, name, content, version):
+def upload(store, token, kind, name, content, version, participant_id=None):
     with store.session(write=True) as session:
-        person, talk = editable(store, session, token, version)
+        person, talk = editable(store, session, token, version, participant_id)
         if not talk:
             raise ValueError('Save a talk title before uploading materials.')
         if kind not in ('explainer', 'slides') or not isinstance(name, str) or not 1 <= len(name) <= 180 or any(c in name for c in '/\\\r\n\x00'):

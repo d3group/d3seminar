@@ -126,9 +126,16 @@ class Store:
             result['response_version'] = response_version(record)
             result['state'] = seminar.programme_state(self.state(session))
             result['role'] = record.get('role', '')
+            result['participant_id'] = record['id']
             result['presentation'] = presentations.own(session, record['id']) if result['role'] in presentations.PRESENTER_ROLES else {}
+            result['presentation_contribution'] = presentations.contribution(session, record['id'])
             if include_presentations:
+                result['presenter_options'] = [{key:person[key] for key in ('id', 'name', 'email')}
+                                               for person in sorted(self.records(session), key=lambda person: person['name'].casefold())
+                                               if person['active'] and person.get('role') in presentations.PRESENTER_ROLES]
                 result['presentations'] = presentations.listing(self, session, record['id'])
+                result['editable_presentations'] = [dict(presentations.own(session, talk['participant_id']), participant_id=talk['participant_id'])
+                                                    for talk in result['presentations'] if talk['mine'] and result['role'] in presentations.PRESENTER_ROLES]
                 result['presentation_order_version'] = presentations.order_version(result['presentations'])
             if include_votes:
                 people = sorted(self.records(session), key=lambda person: (person['name'].casefold(), person['id']))
@@ -252,7 +259,7 @@ def create_app(service):
     app.config['MAX_CONTENT_LENGTH'] = presentations.MAX_FILE_SIZE
     app.url_map.merge_slashes = False
     allowed_headers = {'content-type', 'accept', 'x-invitation-token', 'x-event-id',
-                       'x-material-kind', 'x-file-name', 'x-presentation-version'}
+                       'x-material-kind', 'x-file-name', 'x-presentation-version', 'x-presentation-owner'}
 
     @app.before_request
     def check_request():
@@ -337,7 +344,7 @@ def create_app(service):
 
     def presentation_result(store, token):
         current = invitation_result(store, token, include_presentations=True)
-        return dict(ok=True, **{key:current[key] for key in ('presentation', 'presentations', 'presentation_order_version', 'is_organizer')})
+        return dict(ok=True, **{key:current[key] for key in ('presentation', 'presentation_contribution', 'editable_presentations', 'presentations', 'presentation_order_version', 'is_organizer')})
 
     @app.get('/health')
     def health():
@@ -390,7 +397,8 @@ def create_app(service):
         store = event_store(dict(event_id=request.headers.get('X-Event-Id')))
         token = request.headers.get('X-Invitation-Token')
         presentations.upload(store, token, request.headers.get('X-Material-Kind'),
-            unquote(request.headers.get('X-File-Name', '')), request.get_data(), request.headers.get('X-Presentation-Version', ''))
+            unquote(request.headers.get('X-File-Name', '')), request.get_data(), request.headers.get('X-Presentation-Version', ''),
+            participant_id=request.headers.get('X-Presentation-Owner'))
         return presentation_result(store, token)
 
     @app.post('/api/public-event')
@@ -416,7 +424,8 @@ def create_app(service):
     def presentation():
         data = parameters()
         store, token = event_store(data), data.get('token')
-        presentations.save(store, token, data.get('presentation'), data.get('version', ''), remove=data.get('remove') is True)
+        presentations.save(store, token, data.get('presentation'), data.get('version', ''), remove=data.get('remove') is True,
+                           participant_id=data.get('participant_id'))
         return presentation_result(store, token)
 
     @app.post('/api/calendar')

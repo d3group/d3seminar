@@ -49,7 +49,10 @@
           <input type="hidden" name="revision" id="revision">
           <input type="hidden" name="response_version" id="response-version">
           <p class="poll-help" id="poll-help">Mark each option Available or Unavailable. Leave it blank if you have not decided yet.</p>
-          <div class="bulk-actions"><button class="text-button" type="button" id="all-available">All times work</button><button class="text-button" type="button" id="all-unavailable">None of these work</button></div>
+          <div class="bulk-actions">
+            <button type="button" id="all-available"><span class="bulk-action-icon" aria-hidden="true">✓</span><span id="all-available-label">All times work</span></button>
+            <button type="button" id="all-unavailable"><span class="bulk-action-icon" aria-hidden="true">✗</span><span>None of these work</span></button>
+          </div>
           <div id="poll-options"></div>
           <p class="answer-progress" id="answer-progress" aria-live="polite"></p>
           <label class="notes-label" for="comment">A note for the organizer <span id="comment-hint">(optional)</span></label>

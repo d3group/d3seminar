@@ -32,8 +32,21 @@
       <form id="presentation-form">
         <label for="presentation-event">Event</label>
         <select id="presentation-event" name="event_id"></select>
+        <div id="talk-choice" hidden>
+          <label for="presentation-talk">Talk to edit</label>
+          <select id="presentation-talk"></select>
+        </div>
         <label for="talk-title">Talk title</label>
         <input id="talk-title" name="title" maxlength="200" required>
+        <fieldset class="co-presenters">
+          <legend>Presenters</legend>
+          <p id="talk-submitter" class="presentation-help"></p>
+          <details>
+            <summary>Add co-presenters</summary>
+            <div id="co-presenter-options"></div>
+          </details>
+          <p class="presentation-help">Every listed presenter can edit this talk and its materials.</p>
+        </fieldset>
         <label class="consent"><input id="talk-placeholder" type="checkbox"> Provisional title — details to follow</label>
         <label for="talk-abstract">Abstract <span class="field-hint">(optional for now)</span></label>
         <textarea id="talk-abstract" name="abstract" maxlength="5000" rows="4"></textarea>

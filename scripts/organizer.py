@@ -265,7 +265,7 @@ class Organizer:
                         if not person['active']:
                             continue
                         registered.setdefault(person['email'], set()).add(entry['id'])
-                        if presentations.own(session, person['id']).get('title'):
+                        if presentations.contribution(session, person['id']).get('title'):
                             planned.add(person['email'])
         saved = draft(self, event_id, kind)
         template = {key:saved[key] for key in ('subject', 'body')}
