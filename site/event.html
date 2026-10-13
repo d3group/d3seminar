@@ -12,7 +12,7 @@
 </head>
 <body>
   <header class="masthead">
-    <a class="university-brand" href="https://www.uni-wuerzburg.de/" aria-label="University of Würzburg"><img class="university-logo" src="assets/uni-wuerzburg.svg" width="347" height="152" alt="Julius-Maximilians-Universität Würzburg"></a>
+    <a class="university-brand" href="./" data-invitation-link aria-label="D3 programme home"><img class="university-logo" src="assets/uni-wuerzburg.svg" width="347" height="152" alt="Julius-Maximilians-Universität Würzburg"></a>
     <nav class="programme-tabs" aria-label="Main navigation">
       <a href="./" data-invitation-link aria-current="page">Programme</a>
       <a href="agenda.html" data-invitation-link>Agenda</a>
@@ -36,12 +36,14 @@
       </div>
       <section class="response-card" aria-labelledby="card-title">
         <div class="card-top"><span class="eyebrow">Availability</span><span class="status-pill" id="status-pill">Preview</span></div>
-        <h2 id="card-title">Select your availability</h2>
-        <p class="card-intro" id="greeting">Mark each option below.</p>
-        <p class="poll-meta" id="poll-meta"></p>
-        <p class="poll-deadline" id="poll-deadline"></p>
+        <div class="availability-intro">
+          <h2 id="card-title">Select your availability</h2>
+          <p class="card-intro" id="greeting">Mark each option below.</p>
+          <p class="poll-deadline" id="poll-deadline"></p>
+        </div>
         <div class="session" id="final-session" hidden><div><h3>Our event time is confirmed.</h3><p id="final-time"></p><p class="venue" id="session-location"></p></div></div>
         <section class="event-programme" id="final-programme" aria-label="Event programme" hidden></section>
+        <section id="availability-calendar" class="event-calendar availability-calendar" aria-label="Event dates and responses" hidden></section>
         <p id="notice" class="notice" role="status" aria-live="polite">Loading…</p>
         <form id="response-form" method="post" hidden>
           <input type="hidden" name="event_id" id="event-id">
@@ -63,6 +65,7 @@
           </div>
           <p class="privacy">Your name and availability are visible to invited participants; only totals appear publicly. Notes are only visible to the organizers. Keep your personal link private. You can update your answers until the time is finalized.</p>
         </form>
+        <div id="availability-responses"></div>
         <button class="calendar-link" id="calendar" type="button" hidden>Add confirmed time to calendar</button>
       </section>
     </section>

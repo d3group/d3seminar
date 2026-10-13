@@ -78,6 +78,18 @@ class MailerTests(unittest.TestCase):
         with patch.object(seminar, 'now', return_value='2026-10-10T12:00:00+00:00'):
             self.assertEqual(self.preview('invite')['event_id'], 'seminar-2')
 
+    def test_initial_sender_label_keeps_the_university_address_and_personal_signature(self):
+        plan = self.preview('initial')
+        self.assertEqual(plan['sender_name'], 'Organizer D3 Seminar')
+        mail = mailer.message(plan, plan['messages'][0])
+        self.assertEqual(str(mail['From']), 'Organizer D3 Seminar <organizer@example.com>')
+        self.assertIn('Best,\nOrganizer\n', plan['messages'][0]['body'])
+        self.assertEqual(self.preview('invite')['sender_name'], 'Organizer')
+        content = mailer.api(self.settings, 'email_draft', mail_event='seminar-1', kind='initial')
+        example = mailer.api(self.settings, 'email_example', mail_event='seminar-1', kind='initial',
+                             subject=content['subject'], body=content['body'])
+        self.assertEqual(example['sender_name'], plan['sender_name'])
+
     def test_student_nudges_link_to_later_placeholders_and_skip_planned_students(self):
         plan = self.preview('present')
         self.assertEqual([m['name'] for m in plan['messages']], ['Ada','Bea'])

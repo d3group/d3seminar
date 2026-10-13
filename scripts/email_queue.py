@@ -54,7 +54,7 @@ def example(organizer, event_id, kind, content):
             later = upcoming[index+1:] if index is not None else []
         person = dict(name='Person A', email='person.a@example.org', role='student', token='example-link', poll=poll)
         mail = seminar.message_content(config, local, person, kind, state, later, content)
-        return dict(mail, sender=local['sender_email'], sender_name=local['sender_name'], provisional=provisional,
+        return dict(mail, sender=local['sender_email'], sender_name=mail_templates.sender_display_name(kind, local['sender_name']), provisional=provisional,
                     attachments=[part['name'] for part in mail['attachments']])
 
 

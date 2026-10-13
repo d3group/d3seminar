@@ -108,11 +108,11 @@ try {
   assert.equal(await preview().locator('table, .material-download, .talk-duration-bar').count(), 0);
   assert.ok((await preview().boundingBox()).height < 110);
   await peek.locator('[data-event="seminar-1"] button.calendar-date').first().click();
-  await peek.locator('[data-event="seminar-1"] .calendar-choice').getByLabel('Available', {exact:true}).check();
-  await peek.locator('[data-event="seminar-1"] .calendar-response-form').getByRole('button', {name:'Save changes', exact:true}).click();
-  await peek.locator('[data-event="seminar-1"] .calendar-save-status').filter({hasText:'Response saved.'}).waitFor();
+  await peek.locator('.poll-option').first().getByLabel('Available', {exact:true}).check();
+  await peek.getByRole('button', {name:'Save for later', exact:true}).click();
+  await peek.locator('#notice').filter({hasText:'Response saved.'}).waitFor();
+  await peek.getByRole('link', {name:'All four events', exact:true}).click();
   await preview().getByText('Decision-focused learning', {exact:false}).waitFor();
-  await peek.getByRole('button', {name:'Close responses for Seminar 1'}).click();
   await peek.screenshot({path:root+'test-results/programme-agenda-preview-desktop.png', fullPage:true});
   await peek.setViewportSize({width:320,height:844});
   assert.equal(await peek.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);

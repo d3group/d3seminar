@@ -55,27 +55,46 @@ try {
   assert.ok(arrowBox.x >= cardBox.x + cardBox.width && arrowBox.y > cardBox.y && arrowBox.y + arrowBox.height < cardBox.y + cardBox.height);
   assert.equal(await page.getByRole('button', {name:'Earlier events', exact:true}).getAttribute('aria-disabled'), 'true');
   const first = page.locator('[data-event="seminar-1"]');
-  // Opening and switching response panels must preserve the calendar DOM and viewport.
+  // Programme dates navigate to the same calendar at a larger size, on desktop and mobile.
   for (const width of [1440, 390]) {
     await page.setViewportSize({width, height:844});
     await shown(width === 390 ? ['seminar-1'] : ['seminar-1', 'seminar-2']);
-    const dates = first.locator('button.calendar-date');
-    await dates.first().evaluate(node => node.scrollIntoView({block:'center', behavior:'instant'}));
-    const calendar = await first.locator('.calendar-month').first().elementHandle();
-    const position = () => page.evaluate(() => ({y:scrollY, x:document.querySelector('.timeline-track').scrollLeft}));
-    const before = await position();
-    for (const date of [dates.first(), dates.nth(1), dates.nth(1)]) {
-      await date.click();
-      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      assert.deepEqual(await position(), before);
-      assert.equal(await calendar.evaluate(node => node.isConnected), true);
-    }
-    await calendar.dispose();
+    const date = first.locator('button.calendar-date').first();
+    const small = await date.boundingBox();
+    await date.click();
+    await page.locator('#availability-calendar .calendar-month').waitFor();
+    assert.equal(new URL(page.url()).pathname.split('/').at(-1), 'event.html');
+    assert.equal(new URL(page.url()).searchParams.get('event'), 'seminar-1');
+    const large = await page.locator('#availability-calendar button.calendar-date').first().boundingBox();
+    assert.ok(large.width > small.width);
+    assert.equal(await page.locator('.selected-date-option').count(), 1);
+    const cards = await page.locator('#poll-options .poll-option').evaluateAll(nodes => nodes.map(node => ({y:node.getBoundingClientRect().y, width:node.clientWidth, content:node.scrollWidth})));
+    if (width === 1440) assert.equal(new Set(cards.slice(0, 4).map(card => card.y)).size, 1);
+    assert.ok(cards.every(card => card.content <= card.width));
+    const responses = await page.locator('#availability-responses').boundingBox();
+    const privacy = await page.locator('#response-form .privacy').boundingBox();
+    assert.ok(responses.y >= privacy.y + privacy.height);
+    assert.equal(await page.locator('#greeting strong em').textContent(), 'Browser');
+    const choice = page.locator('#poll-options .poll-option').nth(1);
+    const heading = choice.getByRole('button', {name:/Show responses/});
+    await heading.click();
+    assert.equal(await heading.getAttribute('aria-expanded'), 'true');
+    assert.equal(await choice.locator('input:checked').count(), 0);
+    await choice.getByLabel('Available', {exact:true}).check();
+    assert.equal(await heading.getAttribute('aria-expanded'), 'true');
+    await choice.getByRole('button', {name:/Clear answer/}).click();
+    assert.equal(await heading.getAttribute('aria-expanded'), 'true');
+    await heading.focus(); await page.keyboard.press('Enter');
+    assert.equal(await heading.getAttribute('aria-expanded'), 'false');
+    await choice.click({position:{x:3, y:3}});
+    assert.equal(await heading.getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({path:`test-results/availability-calendar-${width}.png`, fullPage:true});
+    await page.getByRole('link', {name:'All four events', exact:true}).click();
+    await first.locator('.calendar-month').waitFor();
   }
   await page.setViewportSize({width:1440, height:1080});
   await shown(['seminar-1', 'seminar-2']);
-  await first.locator('button.calendar-date').first().click();
-  await first.getByLabel('Available', {exact:true}).check();
   await page.getByRole('button', {name:'Later events', exact:true}).click();
   await shown(['seminar-3', 'onsite']);
   assert.equal(await page.getByRole('button', {name:'Later events', exact:true}).getAttribute('aria-disabled'), 'true');
@@ -85,10 +104,6 @@ try {
   await page.screenshot({path:'test-results/timeline-later.png', fullPage:true});
   await page.getByRole('button', {name:'Earlier events', exact:true}).click();
   await shown(['seminar-1', 'seminar-2']);
-  assert.equal(await first.getByLabel('Available', {exact:true}).isChecked(), true);
-  await first.getByRole('button', {name:'Save changes', exact:true}).click();
-  await first.locator('.calendar-save-status').filter({hasText:'Response saved.'}).waitFor();
-  await first.getByRole('button', {name:'Close responses for Seminar 1'}).click();
   await page.screenshot({path:'test-results/timeline-programme.png', fullPage:true});
   await page.getByRole('button', {name:'Later events', exact:true}).focus();
   await page.keyboard.press('End');

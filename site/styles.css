@@ -262,7 +262,7 @@ a.progress-step:hover .progress-step-name { text-decoration: underline; }
 .event-summary-period { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
 .event-reply-deadline { margin: 10px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .event-reply-deadline time, #home-deadline time { color: #8b2635; font-weight: 600; }
-.event-reply-deadline.preferences-saved, #home-intro.preferences-saved { color: #315e48; }
+.event-reply-deadline.preferences-saved, #home-intro.preferences-saved, #greeting .preferences-saved { color: #315e48; }
 .event-disclosure[open] .event-summary-period { display: none; }
 .event-card:has(.next-seminar-note), .agenda-event:has(.next-seminar-note) { padding-top: 40px; }
 .next-seminar-note { position: absolute; top: -20px; right: 24px; width: 146px; margin: 0; padding: 14px 10px 10px; transform: rotate(3deg); background: #f0d8bd; color: #4e4225; border-radius: 2px 3px 4px 3px; box-shadow: 2px 5px 10px #302a181a; font-family: "Noteworthy", "Segoe Print", "Comic Sans MS", cursive; font-size: 25px; font-weight: 400; line-height: 1.25; text-align: center; }
@@ -277,6 +277,11 @@ a.progress-step:hover .progress-step-name { text-decoration: underline; }
 .event-calendar { margin: 0 0 16px; }
 .event-calendar .calendar-month { table-layout: fixed; font-variant-numeric: tabular-nums; }
 .calendar-month + .calendar-month { margin-top: 20px; }
+.availability-calendar { max-width: 560px; margin: 20px auto; }
+.availability-calendar .calendar-date { width: min(52px, 100%); font-size: 15px; }
+.availability-calendar th, .availability-calendar td { padding-block: 4px; }
+.availability-calendar .calendar-month caption { font-size: 24px; }
+.poll-option.selected-date-option { border-color: var(--link); outline: 1px solid var(--link); }
 .calendar-month caption { text-align: left; font-family: Georgia, "Times New Roman", serif; font-size: 21px; line-height: 1.4; padding-bottom: 14px; }
 .event-calendar th, .event-calendar td { text-align: center; padding: 3px 0; border: 0; line-height: 1; }
 .event-calendar th { color: var(--muted); font-size: 11px; font-weight: 400; padding-bottom: 9px; }
@@ -335,7 +340,7 @@ button.calendar-date[aria-expanded="true"] .calendar-day-number { text-decoratio
 .vote-mark.vote-unknown { fill: transparent; stroke: transparent; }
 .vote-available { color: #315e48; }
 .vote-unavailable { color: #9d4538; }
-.vote-professor { --vote-role-color: #8b2635; }
+.vote-professor { --vote-role-color: #315e48; }
 .vote-student { --vote-role-color: #193f68; }
 .vote-mark { color: var(--vote-role-color); }
 .vote-unknown { color: #737b84; }
@@ -416,8 +421,11 @@ footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8p
 .card-top .eyebrow { margin: 0; }
 .status-pill { font-size: 12px; color: var(--muted); }
 .card-intro { font-size: 14px; color: var(--muted); margin-bottom: 22px; }
-.poll-meta { font-size: 14px; font-weight: 500; margin-bottom: 6px; }
 .poll-deadline { font-size: 13px; color: var(--muted); margin-bottom: 21px; }
+.poll-deadline time { color: #8b2635; font-weight: 700; }
+.availability-intro { margin-bottom: 20px; line-height: 1.8; }
+.availability-intro h2, .availability-intro p { display: inline; margin: 0; font-size: 14px; }
+.availability-intro h2 { display: block; margin-bottom: 8px; font-size: 16px; }
 .poll-help { font-size: 13px; color: var(--muted); line-height: 1.7; margin-bottom: 12px; }
 .bulk-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 22px; }
 .bulk-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 10px; flex: 1 1 180px; min-height: 48px; padding: 10px 14px; border: 2px solid currentColor; border-radius: 4px; background: #fff; font-size: 13px; font-weight: 600; }
@@ -427,7 +435,19 @@ footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8p
 .bulk-action-icon { font-size: 22px; font-weight: 800; line-height: 1; }
 .text-button, .clear-answer, .calendar-link { border: 0; background: none; color: var(--link); padding: 5px 0; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
 fieldset { border: 0; padding: 0; min-width: 0; }
-#poll-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px 16px; margin-bottom: 22px; }
+#poll-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px 12px; margin-bottom: 22px; }
+#poll-options .poll-option { padding: 8px 7px 5px; }
+#poll-options .poll-option-heading { margin-bottom: 8px; }
+#poll-options .poll-option-date-row { gap: 6px; }
+#poll-options .poll-option-calendar { width: 16px; height: 16px; }
+#poll-options .poll-option-date { font-size: 15px; }
+#poll-options .poll-option-time { font-size: 12px; margin-top: 4px; }
+#poll-options .availability-choice { min-height: 34px; padding: 5px; }
+#poll-options .availability-icon { font-size: 18px; }
+#poll-options .poll-option { cursor: pointer; }
+.response-toggle { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
+.response-toggle:hover .poll-option-date { text-decoration: underline; text-underline-offset: 3px; }
+.response-toggle:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
 .poll-option { margin: 0; padding: 14px 12px 10px; border: 1px solid #aab6c2; border-radius: 5px; background: #fff; }
 .poll-option-heading { margin-bottom: 14px; }
 .poll-option-date-row { display: flex; align-items: flex-start; gap: 8px; }
@@ -583,6 +603,7 @@ td.unavailable { color: #8e4033; }
   .receipt-page { padding: 30px 20px 44px; }
 }
 @media (max-width: 520px) {
+  #poll-options { grid-template-columns: 1fr; }
   .masthead:has(.programme-tabs) { gap: 12px; }
   .programme-tabs { flex-direction: column; gap: 0; }
   .programme-tabs a { min-height: 36px; font-size: 13px; }

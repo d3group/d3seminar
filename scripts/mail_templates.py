@@ -21,6 +21,10 @@ FIELDS = {
 SUBJECT_FIELDS = {'name', 'first_name', 'event_name', 'semester', 'sender_name', 'sender_email'}
 
 
+def sender_display_name(kind, name):
+    return 'Organizer D3 Seminar' if kind == 'initial' else name
+
+
 def default_template(kind, config):
     if kind not in TEMPLATES:
         raise ValueError('Choose a supported email type.')

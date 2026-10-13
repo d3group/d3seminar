@@ -1,7 +1,8 @@
 import {apiFetch, loadConfig, apiUrl, serviceNotice} from './api.js';
-import {$, availabilityCard, availabilityChoice, germanSlotLabel, selectEvent, durationLabel, dailyHoursLabel, preserveInvitationLinks, eventHref, answeredCount, eventFinished, nextEvent, loadProgramme, programmeProgress, showSavedResponse, renderProgramme} from './shared.js';
+import {renderCalendar} from './calendar.js';
+import {$, availabilityCard, availabilityChoice, germanSlotLabel, selectEvent, dailyHoursLabel, preserveInvitationLinks, eventHref, answeredCount, responseComplete, eventFinished, nextEvent, loadProgramme, programmeProgress, showSavedResponse, renderProgramme} from './shared.js';
 preserveInvitationLinks(new URLSearchParams(location.hash.slice(1)).get('token'));
-let config, poll, token, programme = [], saving = false;
+let config, poll, token, programme = [], saving = false, availabilityCalendar;
 const eventId = new URLSearchParams(location.search).get('event') || 'seminar-1';
 const choices = [['available', 'Available'], ['unavailable', 'Unavailable']];
 const fmt = (value, options) => new Intl.DateTimeFormat('de-DE', {timeZone:poll.timezone, ...options}).format(new Date(value));
@@ -12,6 +13,24 @@ function notice(message, error = false) {
   $('notice').textContent = message;
   $('notice').classList.toggle('error', error);
   $('notice').hidden = !message;
+}
+
+function greet(firstName, message, completed = false) {
+  const name = document.createElement('strong');
+  const emphasis = document.createElement('em');
+  emphasis.textContent = firstName; name.append(emphasis);
+  const text = document.createElement('span');
+  text.textContent = message;
+  text.classList.toggle('preferences-saved', completed);
+  $('greeting').replaceChildren('Hello ', name, '. ', text);
+}
+
+function renderIntroduction(invitation) {
+  const completed = responseComplete(invitation);
+  greet(invitation.name.trim().split(/\s+/)[0], completed
+    ? 'Thank you for setting your preferences.'
+    : 'Please mark all the times that work for you', completed);
+  $('poll-deadline').hidden = completed;
 }
 
 function progress(edited = false) {
@@ -54,6 +73,7 @@ async function saveResponse(event) {
   const advance = event.submitter?.value !== 'stay';
   const form = $('response-form');
   const body = new URLSearchParams(new FormData(form));
+  body.set('include_votes', 'true');
   saving = true; form.inert = true; form.setAttribute('aria-busy', 'true');
   $('submit-button').disabled = true; $('save-later').disabled = true;
   notice('Saving your availability…');
@@ -72,6 +92,8 @@ async function saveResponse(event) {
     $('comment').value = saved.comment;
     $('status-pill').textContent = 'Saved';
     renderJourney();
+    renderIntroduction(current.invitation);
+    renderAvailabilityCalendar(current.invitation);
     if (advance) {
       const next = nextEvent(programme, eventId);
       const destination = new URL(next ? eventHref(next.event.id, token) : './#' + new URLSearchParams({token}), location.href);
@@ -91,11 +113,30 @@ async function saveResponse(event) {
 }
 
 function renderPoll(answers = {}) {
-  $('poll-meta').textContent = `${durationLabel(poll)} · All times in ${poll.timezone}`;
-  $('poll-deadline').textContent = `Please set your preferences by ${fmt(poll.deadline, {weekday:'long'})}, ${date(poll.deadline)}.`;
+  const deadline = document.createElement('time');
+  deadline.dateTime = poll.deadline;
+  deadline.textContent = `${fmt(poll.deadline, {weekday:'long'})}, ${date(poll.deadline)}`;
+  $('poll-deadline').replaceChildren('by ', deadline, '.');
   $('poll-options').replaceChildren();
   for (const slot of poll.slots) {
     const fieldset = availabilityCard(slot, poll.timezone, poll.daily_hours);
+    fieldset.dataset.slotId = slot.id;
+    const heading = fieldset.querySelector('.poll-option-heading');
+    const inspect = document.createElement('button');
+    inspect.type = 'button'; inspect.className = 'poll-option-heading response-toggle';
+    inspect.setAttribute('aria-label', `Show responses for ${germanSlotLabel(slot, poll.timezone, poll.daily_hours)}`);
+    inspect.setAttribute('aria-controls', 'votes-' + eventId);
+    inspect.setAttribute('aria-expanded', 'false');
+    inspect.append(...heading.childNodes); heading.replaceWith(inspect);
+    const showResponses = () => {
+      availabilityCalendar.showSlot(slot.id, inspect);
+      const panel = $('availability-responses').querySelector('.calendar-votes:not([hidden])');
+      panel?.scrollIntoView({block:'nearest', behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
+    };
+    inspect.addEventListener('click', showResponses);
+    fieldset.addEventListener('click', event => {
+      if (!event.target.closest('button, input, label, a')) showResponses();
+    });
     const row = document.createElement('div');
     row.className = 'availability-choices';
     for (const [value, title] of choices) {
@@ -108,6 +149,24 @@ function renderPoll(answers = {}) {
     fieldset.append(row, clear); $('poll-options').append(fieldset);
   }
   progress();
+}
+
+function renderAvailabilityCalendar(invitation) {
+  const final = invitation.state.final_event;
+  const container = $('availability-calendar');
+  container.hidden = false;
+  availabilityCalendar = renderCalendar(container, {...config, ...poll, slots:final ? [final] : poll.slots}, {
+    confirmed:Boolean(final), people:invitation.participants,
+    responseContainer:final ? null : $('availability-responses'),
+    openDate:new URLSearchParams(location.search).get('date'),
+    onInspect:slots => {
+      const selected = new Set(slots.map(slot => slot.id));
+      $('poll-options').querySelectorAll('[data-slot-id]').forEach(card => {
+        card.classList.toggle('selected-date-option', selected.has(card.dataset.slotId));
+        card.querySelector('.response-toggle').setAttribute('aria-expanded', String(selected.has(card.dataset.slotId)));
+      });
+    }
+  });
 }
 
 async function calendar() {
@@ -155,14 +214,15 @@ async function start() {
   }
   $('response-form').addEventListener('submit', saveResponse);
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('This invitation link is incomplete. Please open the full link from your email.');
-  programme = await loadProgramme(config, token);
+  programme = await loadProgramme(config, token, true);
   const current = programme.find(entry => entry.event.id === eventId);
   const invitation = current.invitation;
   if (!invitation) throw new Error(current.error || 'Your invitation could not be loaded.');
   renderJourney(); showSavedResponse(programme, token);
   // Read current options from the backend, so existing email links survive a new round.
   poll = invitation.poll; renderPoll(invitation.answers);
-  $('greeting').textContent = `Hello ${invitation.name}. Please mark all the times that work for you.`;
+  renderAvailabilityCalendar(invitation);
+  renderIntroduction(invitation);
   $('response-form').action = apiUrl('respond');
   $('token').value = token; $('revision').value = invitation.revision;
   $('response-version').value = invitation.response_version;
@@ -171,7 +231,7 @@ async function start() {
   if (state.final_event) {
     $('status-pill').textContent = 'Confirmed';
     $('card-title').textContent = 'Confirmed date';
-    $('greeting').textContent = `Hello ${invitation.name}. We found a time everyone can attend.`;
+    greet(invitation.name.trim().split(/\s+/)[0], 'We found a time everyone can attend.');
     const event = state.final_event;
     $('final-session').hidden = false;
     $('final-time').textContent = `${germanSlotLabel(event, poll.timezone, poll.daily_hours)} · ${poll.timezone}`;

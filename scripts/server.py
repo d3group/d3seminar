@@ -358,7 +358,7 @@ def create_app(service):
     @app.get('/<path:filename>')
     def site_file(filename='index.html'):
         filename = 'admin.html' if filename == 'admin' else filename
-        allowed = {'index.html', 'event.html', 'home.js', 'api.js', 'shared.js', 'about.html', 'about.js',
+        allowed = {'index.html', 'event.html', 'home.js', 'calendar.js', 'api.js', 'shared.js', 'about.html', 'about.js',
                    'agenda.html', 'agenda.js', 'styles.css', 'app.js', 'admin.html', 'admin.js',
                    'assets/d3.svg', 'assets/uni-wuerzburg.svg', 'assets/agenda-paper.svg'}
         if filename not in allowed:
@@ -372,7 +372,7 @@ def create_app(service):
         record = store.respond(data)
         if 'application/json' not in request.headers.get('Accept', ''):
             return Response(receipt(record, data['token']), content_type='text/html; charset=utf-8')
-        if data.get('partial') == 'true':
+        if data.get('partial') == 'true' or data.get('include_votes') == 'true':
             result = invitation_result(store, data['token'], include_votes=True)
         else:
             result = {key:record[key] for key in ('answers', 'comment', 'updated_at')}

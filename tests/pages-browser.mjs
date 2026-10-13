@@ -103,6 +103,13 @@ try {
         assert.equal(await progressPreview.locator('.event-reply-deadline.preferences-saved').count(), 4);
       }
     }
+    await progressPreview.goto(details.invitation);
+    await progressPreview.locator('#response-form').waitFor();
+    assert.equal(await progressPreview.locator('#greeting strong em').textContent(), 'Browser');
+    const completed = preferenceState !== 'partial';
+    assert.equal(await progressPreview.locator('#poll-deadline').isVisible(), !completed);
+    assert.equal(await progressPreview.locator('#greeting .preferences-saved').count(), completed ? 1 : 0);
+    assert.match(await progressPreview.locator('#greeting').textContent(), completed ? /Thank you for setting your preferences/ : /Please mark all the times that work for you/);
   }
   await progressPreview.close();
   await page.goto(details.home);
@@ -128,7 +135,7 @@ try {
   assert.equal(await page.locator('[data-event="seminar-1"] .event-reply-deadline').textContent(), deadlineText);
   await page.getByRole('link', {name:'Confirm Seminar 1', exact:true}).click();
   assert.equal(new URL(page.url()).pathname, '/d3seminar/event.html');
-  await page.locator('#poll-deadline').getByText('Please set your preferences by Mittwoch, 07.10.2026.', {exact:true}).waitFor();
+  await page.locator('#poll-deadline').getByText('by Mittwoch, 07.10.2026.', {exact:true}).waitFor();
   await page.locator('.poll-option').first().getByLabel('Available', {exact:true}).check();
   await page.getByRole('button', {name:'Save for later', exact:true}).click();
   await page.locator('#notice').filter({hasText:'Response saved.'}).waitFor();
@@ -138,9 +145,12 @@ try {
   await otherTab.goto(details.home);
   const firstCard = otherTab.locator('[data-event="seminar-1"]');
   await firstCard.locator('button.calendar-date').first().click();
-  await firstCard.getByLabel('Unavailable', {exact:true}).check();
-  await firstCard.getByRole('button', {name:'Save changes', exact:true}).click();
-  await firstCard.locator('.calendar-save-status').filter({hasText:'Response saved.'}).waitFor();
+  await otherTab.locator('#availability-calendar .calendar-month').waitFor();
+  assert.equal(new URL(otherTab.url()).pathname, '/d3seminar/event.html');
+  assert.ok(new URL(otherTab.url()).searchParams.has('date'));
+  await otherTab.locator('.poll-option').first().getByLabel('Unavailable', {exact:true}).check();
+  await otherTab.getByRole('button', {name:'Save for later', exact:true}).click();
+  await otherTab.locator('#notice').filter({hasText:'Response saved.'}).waitFor();
   const readSaved = async () => {
     const response = await page.request.post(details.api + 'api/invitation', {data:{token:'T'.repeat(43), event_id:'seminar-1'}});
     assert.equal(response.status(), 200);

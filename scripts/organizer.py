@@ -243,9 +243,11 @@ class Organizer:
 
     def mail_queue(self, event_id, kind):
         from email_queue import draft
+        from mail_templates import sender_display_name
         event_id = self.mail_event_id(event_id, kind)
         config = seminar.event_config(self.config, event_id)
         local = seminar.read_json(self.private / 'settings.json')
+        sender_name = sender_display_name(kind, local['sender_name'])
         invitations = self.records(event_id)
         if config['test_mode'] and any(r['email'] != local['test_recipient'] for r in invitations):
             raise ValueError('Test mode allows only your test address. No email was sent.')
@@ -277,10 +279,10 @@ class Organizer:
             alternatives = [e for e in later if e['id'] in registered.get(invite['email'], set())]
             row = dict(id=invite['id'], key=key, name=invite['name'],
                        **seminar.message_content(config, local, invite, kind, dashboard['state'], alternatives, template))
-            row['preview'] = seminar.event_revision(dict(message=row, sender=local['sender_email'], sender_name=local['sender_name']))
+            row['preview'] = seminar.event_revision(dict(message=row, sender=local['sender_email'], sender_name=sender_name))
             messages.append(row)
         return dict(event_id=event_id, event_name=config.get('name', config['title']), kind=kind, messages=messages,
-                    sender=local['sender_email'], sender_name=local['sender_name'])
+                    sender=local['sender_email'], sender_name=sender_name)
 
     def preview_mail(self, event_id, kind):
         with self.lock():

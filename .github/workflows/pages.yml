@@ -35,6 +35,7 @@ jobs:
           node --check site/app.js
           node --check site/admin.js
           node --check site/home.js
+          node --check site/calendar.js
           node --check site/about.js
           node --check site/agenda.js
           node --check site/shared.js
