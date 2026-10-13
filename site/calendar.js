@@ -1,4 +1,4 @@
-import {element, slotLabel, voteCounts, participantRings, ringArc, calendarDay, onsiteDays} from './shared.js';
+import {element, slotLabel, voteCounts, participantRings, orderedRingResponses, ringArc, calendarDay, onsiteDays} from './shared.js';
 
 const answerNames = {available:'Available', unavailable:'Unavailable', unknown:'Awaiting reply'};
 function answerFor(person, slot) {
@@ -12,9 +12,8 @@ function voteRing(people, slots) {
   for (const ring of participantRings(people)) {
     const group = document.createElementNS(svg.namespaceURI, 'g');
     group.classList.add('vote-group', 'vote-' + ring.role);
-    ring.people.forEach((person, index) => {
+    orderedRingResponses(ring, slots).forEach(({answers, index}) => {
       const personMarks = document.createElementNS(svg.namespaceURI, 'g'); personMarks.classList.add('vote-person');
-      const answers = slots.map(slot => answerFor(person, slot));
       const segments = new Set(answers).size === 1 ? [answers[0]] : answers;
       segments.forEach((answer, segment) => {
         const mark = document.createElementNS(svg.namespaceURI, 'path');

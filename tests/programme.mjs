@@ -1,10 +1,40 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {answeredCount, responseComplete, nextEvent, nextSeminar, voteCounts, participantRings, ringArc, calendarDay, durationLabel, deadlineLabel, slotLabel, onsiteDays, agendaSchedule, presentationProgress} from '../site/shared.js';
+import {answeredCount, responseComplete, nextEvent, nextSeminar, voteCounts, participantRings, orderedRingResponses, ringArc, calendarDay, durationLabel, deadlineLabel, slotLabel, onsiteDays, agendaSchedule, presentationProgress} from '../site/shared.js';
 
 const poll = {required_participants:20, slots:[{id:'a'}, {id:'b'}]};
 const invitation = (answers = {}, state = {}) => ({poll, answers, state});
 const entry = (id, answers = {}, state = {}) => ({event:{id}, invitation:invitation(answers, state)});
+
+test('rings pack available marks first and unavailable marks after empty positions', () => {
+  const people = [
+    {name:'No', role:'professor', answers:{a:'unavailable'}},
+    {name:'Waiting', role:'professor', answers:{}},
+    {name:'Yes', role:'professor', answers:{a:'available'}},
+    {name:'Outer yes', role:'student', answers:{a:'available'}}
+  ];
+  const original = structuredClone(people);
+  const [inner, outer] = participantRings(people);
+  assert.deepEqual(orderedRingResponses(inner, [{id:'a'}]).map(row => [row.person.name, row.index]),
+    [['Yes', 0], ['Waiting', 1], ['No', 4]]);
+  assert.equal(orderedRingResponses(outer, [{id:'a'}])[0].index, 0);
+  assert.deepEqual(people, original);
+  const crowded = participantRings(Array.from({length:17}, (_, index) => ({role:'student', answers:{a:index % 2 ? 'available' : 'unavailable'}})))[1];
+  assert.deepEqual(orderedRingResponses(crowded, [{id:'a'}]).map(row => row.index), Array.from({length:17}, (_, index) => index));
+});
+
+test('overlapping onsite options preserve each person and their option segments', () => {
+  const people = [
+    {role:'student', answers:{a:'unavailable', b:'unavailable'}},
+    {role:'student', answers:{a:'available', b:'unavailable'}},
+    {role:'student', answers:{a:'available', b:'available'}},
+    {role:'student', answers:{}}
+  ];
+  const rows = orderedRingResponses(participantRings(people)[1], [{id:'a'}, {id:'b'}]);
+  assert.deepEqual(rows.map(row => row.person), [people[2], people[1], people[3], people[0]]);
+  assert.deepEqual(rows[1].answers, ['available', 'unavailable']);
+  assert.deepEqual(rows.map(row => row.index), [0, 1, 2, 14]);
+});
 
 test('reply deadlines use the event timezone through daylight-saving changes', () => {
   assert.equal(deadlineLabel({deadline:'2026-10-16T15:00:00Z', timezone:'Europe/Berlin'}), 'Friday, 16 October 2026');

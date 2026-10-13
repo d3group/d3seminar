@@ -251,6 +251,22 @@ export function participantRings(people) {
   ].map(ring => ({...ring, capacity:Math.max(ring.capacity, ring.people.length)}));
 }
 
+export function orderedRingResponses(ring, slots) {
+  const responses = ring.people.map(person => {
+    const answers = slots.map(slot => {
+      const answer = person.answers[slot.id || slot.slot_id];
+      return ['available', 'unavailable'].includes(answer) ? answer : 'unknown';
+    });
+    return {person, answers, available:answers.filter(answer => answer === 'available').length,
+      unavailable:answers.filter(answer => answer === 'unavailable').length};
+  });
+  // Keep each person's segments together on dates shared by several onsite options.
+  responses.sort((a, b) => b.available - a.available || a.unavailable - b.unavailable);
+  const empty = Math.max(0, ring.capacity - responses.length);
+  return responses.map((response, index) => ({...response,
+    index:index + (!response.available && response.unavailable ? empty : 0)}));
+}
+
 export function ringArc(ring, index, part = 0, parts = 1) {
   const width = (ring.radius[1] - ring.radius[0]) / parts;
   const radius = ring.radius[0] + (part + 0.5) * width;
@@ -396,7 +412,9 @@ export function availabilityCard(slot, timezone, dailyHours = slot.daily_hours) 
   const heading = element('div', '', 'poll-option-heading');
   heading.setAttribute('aria-hidden', 'true');
   const dates = optionDates(slot, timezone);
-  heading.append(element('span', new Intl.DateTimeFormat('de-DE', {timeZone:timezone, weekday:'long'}).format(new Date(slot.start)), 'poll-option-weekday'));
+  const weekday = new Intl.DateTimeFormat('de-DE', {timeZone:timezone, weekday:'long'});
+  const days = (dates.length > 1 ? [slot.start, slot.end] : [slot.start]).map(value => weekday.format(new Date(value)));
+  heading.append(element('span', days.join(' – '), 'poll-option-weekday'));
   const dateRow = element('div', '', 'poll-option-date-row');
   const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('class', 'poll-option-calendar');

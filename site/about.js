@@ -1,5 +1,5 @@
 import {loadConfig} from './api.js';
-import {preserveInvitationLinks, participantRings, ringArc, loadProgramme} from './shared.js';
+import {preserveInvitationLinks, participantRings, orderedRingResponses, ringArc, loadProgramme} from './shared.js';
 
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
 preserveInvitationLinks(token);
@@ -23,8 +23,9 @@ function mark(ring, index, answer, part = 0, parts = 1) {
 for (const [day, answers] of Object.entries(examples)) {
   const svg = document.createElementNS(ns, 'svg');
   svg.setAttribute('viewBox', '0 0 60 60'); svg.setAttribute('aria-hidden', 'true'); svg.classList.add('vote-ring');
-  for (const ring of participantRings(people)) {
-    ring.people.forEach((person, index) => svg.append(mark(ring, index, answers[people.indexOf(person)])));
+  const replies = people.map((person, index) => ({...person, answers:{example:answers[index]}}));
+  for (const ring of participantRings(replies)) {
+    orderedRingResponses(ring, [{id:'example'}]).forEach(({answers, index}) => svg.append(mark(ring, index, answers[0])));
   }
   document.querySelector(`[data-guide-ring="${day}"]`).append(svg);
 }
