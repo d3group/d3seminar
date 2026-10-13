@@ -13,7 +13,7 @@ COPY scripts/server.py scripts/seminar.py scripts/organizer.py scripts/presentat
 COPY alembic.ini /app/alembic.ini
 COPY migrations/ /app/migrations/
 COPY site/ /app/site/
-RUN chmod -R a+rX /app/site
+RUN chmod -R a+rX /app/site /app/migrations
 COPY docker/backend-entrypoint.sh /app/docker-entrypoint.sh
 USER seminar
 EXPOSE 8765
