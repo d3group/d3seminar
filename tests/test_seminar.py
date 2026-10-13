@@ -121,6 +121,15 @@ class SeminarTests(unittest.TestCase):
         self.assertIn(b'DTSTART:20261009T120000Z', attachments[0]['content'].encode())
         self.assertIn(b'DTEND:20261009T140000Z', attachments[0]['content'].encode())
 
+    def test_email_bold_formatting_keeps_html_escaped_and_plain_text_readable(self):
+        draft = dict(subject='Test', body='Please respond by **{deadline}**.\n\n**<script>alert(1)</script>**\n{invitation_link}')
+        mail = seminar.message_content(CONFIG, seminar.settings(), self.invites()[0], 'invite', draft=draft)
+        self.assertRegex(mail['html'], r'<strong>[^<]*Europe/Berlin[^<]*</strong>')
+        self.assertIn('<strong>&lt;script&gt;alert(1)&lt;/script&gt;</strong>', mail['html'])
+        self.assertNotIn('<script>', mail['html'])
+        self.assertNotIn('**', mail['body'])
+        self.assertIn('>Open your personal invitation</a>', mail['html'])
+
     def test_timing_emails_use_the_saved_deadline_in_event_local_time(self):
         invite = self.invites()[0]
         for instant, expected in [('2026-10-16T15:00:00+00:00', 'Friday, 16 October 2026 at 17:00'),

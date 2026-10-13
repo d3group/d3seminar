@@ -460,7 +460,9 @@ def message_content(config, local, invite, kind, state=None, later=None, draft=N
     subject, body = mail_templates.render(draft, kind, values)
     subject = ('[TEST] ' if config['test_mode'] else '') + subject
     body = test_note + body.strip() + '\n\nPlease keep your personal links private; anyone with them can update your responses and presentations.\n'
-    safe_body = html.escape(body)
+    bold = r'\*\*([^\n]+?)\*\*'
+    safe_body = re.sub(bold, r'<strong>\1</strong>', html.escape(body))
+    body = re.sub(bold, r'\1', body)
     for link, label in links.items():
         safe_body = safe_body.replace(html.escape(link), '<a href="' + html.escape(link, quote=True) + '">' + html.escape(label) + '</a>')
     paragraphs = ''.join('<p style="margin:0 0 18px">' + paragraph.replace('\n', '<br>') + '</p>'
