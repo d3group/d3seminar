@@ -161,8 +161,8 @@ function renderAvailabilityCalendar(invitation) {
   const final = invitation.state.final_event;
   const container = $('availability-calendar');
   container.hidden = false;
-  availabilityCalendar = renderCalendar(container, {...config, ...poll, slots:final ? [final] : poll.slots}, {
-    confirmed:Boolean(final), closed:Boolean(invitation.state.availability_closed), disabledSlotIds:invitation.state.disabled_slot_ids, people:invitation.participants,
+  availabilityCalendar = renderCalendar(container, {...config, ...poll}, {
+    confirmed:Boolean(final), confirmedSlotId:final?.slot_id, closed:Boolean(invitation.state.availability_closed), disabledSlotIds:invitation.state.disabled_slot_ids, people:invitation.participants,
     responseContainer:final ? null : $('availability-responses'),
     openDate:new URLSearchParams(location.search).get('date'),
     onInspect:slots => {

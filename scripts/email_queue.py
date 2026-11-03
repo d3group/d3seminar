@@ -16,7 +16,8 @@ AUDIENCES = {'all', 'professors'}
 def draft(organizer, event_id, kind):
     event_id = organizer.mail_event_id(event_id, kind)
     config = seminar.event_config(organizer.config, event_id)
-    default = mail_templates.default_template(kind, config)
+    finalized_invite = kind == 'invite' and organizer.stores[event_id].dashboard()['state'].get('final_event')
+    default = mail_templates.default_template('confirm' if finalized_invite else kind, config)
     with organizer.stores['seminar-1'].session() as session:
         saved = session.get(MailDraft, event_id + ':' + kind)
         data = dict(saved.data) if saved else dict(default, updated_at=None)
@@ -60,7 +61,7 @@ def example(organizer, event_id, kind, content):
             index = next((i for i, event in enumerate(upcoming) if event['id'] == event_id), None)
             later = upcoming[index+1:] if index is not None else []
         person = dict(name='Person A', email='person.a@example.org', role='student', token='example-link', poll=poll)
-        mail = seminar.message_content(config, local, person, kind, state, later, content)
+        mail = seminar.message_content(config, local, person, kind, state, later, content, organizer.confirmed_calendars(event_id, kind))
         return dict(mail, sender=local['sender_email'], sender_name=mail_templates.sender_display_name(kind, local['sender_name']), provisional=provisional,
                     attachments=[part['name'] for part in mail['attachments']])
 

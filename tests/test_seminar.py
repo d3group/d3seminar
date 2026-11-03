@@ -120,6 +120,10 @@ class SeminarTests(unittest.TestCase):
         self.assertIn(b'STATUS:CONFIRMED', attachments[0]['content'].encode())
         self.assertIn(b'DTSTART:20261009T120000Z', attachments[0]['content'].encode())
         self.assertIn(b'DTEND:20261009T140000Z', attachments[0]['content'].encode())
+        self.assertEqual(attachments[0]['method'], 'REQUEST')
+        self.assertIn('METHOD:REQUEST', attachments[0]['content'])
+        self.assertIn('ORGANIZER:mailto:' + seminar.settings()['sender_email'], attachments[0]['content'])
+        self.assertIn('ATTENDEE;RSVP=TRUE;PARTSTAT=NEEDS-ACTION:mailto:' + ADDRESS, attachments[0]['content'])
 
     def test_email_bold_formatting_keeps_html_escaped_and_plain_text_readable(self):
         draft = dict(subject='Test', body='Please respond by **{deadline}**.\n\n**<script>alert(1)</script>**\n{invitation_link}')
@@ -167,7 +171,10 @@ class SeminarTests(unittest.TestCase):
         self.assertFalse(seminar.eligible(invite, self.remote(invite), 'confirm'))
         state = dict(final_event=seminar.event_data(CONFIG, CONFIG['slots'][0]), finalized_at='today')
         self.assertEqual(seminar.eligible(invite, self.remote(invite, 'confirmed'), 'confirm', state), 'confirm:today')
-        self.assertFalse(seminar.eligible(invite, self.remote(invite), 'invite', state))
+        self.assertEqual(seminar.eligible(invite, self.remote(invite), 'invite', state), 'confirm:today')
+        invite['deliveries']['confirm:today'] = {'status':'sent'}
+        for kind in ('confirm', 'invite'):
+            self.assertFalse(seminar.eligible(invite, self.remote(invite), kind, state))
 
     def test_retired_conditional_reply_is_unfinished_and_check_mail_is_rejected(self):
         invite = self.invites()[0]
@@ -235,7 +242,11 @@ class SeminarTests(unittest.TestCase):
             self.assertIn('Monday, 02 November 2026', plain)
             self.assertIn('Tuesday, 03 November 2026', plain)
             self.assertIn('onsite meeting', str(mail['subject']))
-            calendar = mail['attachments'][0]['content'].encode()
+            self.assertEqual(len(mail['attachments']), 2)
+            for part in mail['attachments']:
+                self.assertEqual(part['content'].count('BEGIN:VEVENT'), 1)
+                self.assertIn('METHOD:REQUEST', part['content'])
+            calendar = ''.join(part['content'] for part in mail['attachments']).encode()
             self.assertIn(b'DTSTART:20261102T080000Z', calendar)
             self.assertIn(b'DTEND:20261103T160000Z', calendar)
             self.assertEqual(calendar.count(b'BEGIN:VEVENT'), 2)
@@ -275,7 +286,11 @@ class SeminarTests(unittest.TestCase):
         mail = seminar.message_content(config, seminar.settings(), invite, 'confirm', {'final_event':event})
         plain = mail['body']
         self.assertIn('final day 09:00–13:00', plain)
-        calendar = mail['attachments'][0]['content'].encode()
+        self.assertEqual(len(mail['attachments']), 3)
+        for part in mail['attachments']:
+            self.assertEqual(part['content'].count('BEGIN:VEVENT'), 1)
+            self.assertIn('METHOD:REQUEST', part['content'])
+        calendar = ''.join(part['content'] for part in mail['attachments']).encode()
         self.assertEqual(calendar.count(b'BEGIN:VEVENT'), 3)
         for line in [b'DTSTART:20261024T070000Z', b'DTEND:20261024T150000Z', b'DTSTART:20261025T080000Z',
                      b'DTEND:20261025T160000Z', b'DTSTART:20261026T080000Z', b'DTEND:20261026T120000Z']:

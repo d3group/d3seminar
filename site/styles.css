@@ -325,6 +325,7 @@ a.progress-step:hover .progress-step-name { text-decoration: underline; }
 .calendar-date { display: flex; align-items: center; justify-content: center; width: min(36px, 100%); aspect-ratio: 1; margin-inline: auto; border: 1px solid transparent; border-radius: 50%; color: var(--muted); font-size: 13px; }
 a.calendar-date { color: var(--link); border: 1.5px var(--date-line) var(--link); font-weight: 600; text-decoration: none; }
 button.calendar-date { position: relative; width: min(44px, 100%); padding: 0; background: none; border: 1.5px var(--date-line) var(--link); color: var(--link); font-weight: 600; }
+button.calendar-date.date-confirmed { box-shadow: 0 0 0 5px #dce9e2; background: #f1f6f3; border-color: #315e48; }
 .calendar-date:is(a, button) { transition: background-color .15s ease, filter .15s ease; }
 .calendar-closed table { filter: grayscale(1); opacity: .65; }
 .calendar-closed button.calendar-date:disabled { opacity: 1; cursor: default; }

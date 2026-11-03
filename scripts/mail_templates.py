@@ -9,7 +9,7 @@ TEMPLATES = {
     'invite': ('Find a time for our seminar', 'Please mark your availability for each option. We are looking for one time when everyone can attend.'),
     'remind': ('Reminder: your seminar availability', 'Please finish marking your availability so we can find a time for everyone.'),
     'present': ('Bring your research to our next seminar', 'Please add a talk for our next seminar. Work in progress, an early result, or a question you would like feedback on is welcome.'),
-    'confirm': ('Our seminar time is confirmed', 'Everyone has confirmed their availability. Our seminar will take place at the time below.'),
+    'confirm': ('Our seminar time is confirmed', 'The organizers have confirmed the date. Our seminar will take place at the time below.'),
 }
 FIELDS = {
     'name':'Full name', 'first_name':'First name', 'event_name':'Event name', 'semester':'Semester',
@@ -52,7 +52,7 @@ def default_template(kind, config):
 
 def required_fields(kind):
     required = {'presentation_link'} if kind == 'present' else {'invitation_link'}
-    if kind in {'initial', 'invite', 'remind'}:
+    if kind in {'initial', 'remind'}:
         required.add('deadline')
     if kind == 'confirm':
         required.add('schedule')

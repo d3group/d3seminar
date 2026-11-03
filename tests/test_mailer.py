@@ -73,8 +73,12 @@ class MailerTests(unittest.TestCase):
         self.assertEqual([m['name'] for m in self.preview('remind')['messages']], ['Bea','Cora'])
         store = self.server.d3_app.store
         with store.session(write=True) as connection:
-            store.write_state(connection, dict(final_event=dict(start='2026-10-09T14:00:00+02:00', end='2026-10-09T16:00:00+02:00')))
-        self.assertEqual(self.preview('invite')['messages'], [])
+            poll = store.dashboard(connection)['poll']
+            store.write_state(connection, dict(final_event=seminar.event_data(poll, poll['slots'][0]), finalized_at='2026-10-08T12:00:00+00:00'))
+        confirmed = self.preview('invite')['messages']
+        self.assertEqual(len(confirmed), 3)
+        self.assertTrue(all(len(row['attachments']) == 1 for row in confirmed))
+        self.assertEqual(self.preview('remind')['messages'], [])
         with patch.object(seminar, 'now', return_value='2026-10-10T12:00:00+00:00'):
             self.assertEqual(self.preview('invite')['event_id'], 'seminar-2')
 

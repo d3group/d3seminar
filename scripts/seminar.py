@@ -192,11 +192,7 @@ def when(slot, timezone_name, daily_hours=None):
     return f'{start:%A, %d %B %Y}, {start:%H:%M}–{end:%H:%M} ({timezone_name})'
 
 
-def calendar_bytes(event, created_at=None):
-    def stamp(value):
-        return value.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    def escape(value):
-        return value.replace('\\', '\\\\').replace('\r', '').replace('\n', '\\n').replace(',', '\\,').replace(';', '\\;')
+def calendar_sessions(event):
     sessions = [(event['campaign_id'], datetime.fromisoformat(event['start']), datetime.fromisoformat(event['end']), event['title'])]
     if event.get('daily_hours'):
         zone = ZoneInfo(event['timezone'])
@@ -208,12 +204,29 @@ def calendar_bytes(event, created_at=None):
             finish = hours.get('last_day_end', hours['end']) if index == event['duration_days'] - 1 else hours['end']
             start, end = (datetime.combine(day, time.fromisoformat(value), tzinfo=zone) for value in (hours['start'], finish))
             sessions.append((f'{event["campaign_id"]}-day-{index + 1}', start, end, f'{event["title"]} (day {index + 1})'))
+    return sessions
+
+
+def calendar_bytes(event, created_at=None, organizer=None, attendee=None):
+    def stamp(value):
+        return value.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    def escape(value):
+        return value.replace('\\', '\\\\').replace('\r', '').replace('\n', '\\n').replace(',', '\\,').replace(';', '\\;')
+    sessions = calendar_sessions(event)
     lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//D3//Seminar//EN']
+    if organizer and attendee:
+        if len(sessions) != 1:
+            raise ValueError('Send each separate meeting as its own calendar invitation.')
+        lines.append('METHOD:REQUEST')
     for uid, start, end, title in sessions:
         created = datetime.fromisoformat(created_at) if created_at else datetime.now(timezone.utc)
         lines.extend(['BEGIN:VEVENT', f'UID:{uid}@d3seminar', f'DTSTAMP:{stamp(created)}',
                       f'DTSTART:{stamp(start)}', f'DTEND:{stamp(end)}', f'SUMMARY:{escape(title)}',
                       f'LOCATION:{escape(event["location"])}'])
+        if organizer and attendee:
+            lines.extend([f'ORGANIZER:mailto:{email_address(organizer)}',
+                          f'ATTENDEE;RSVP=TRUE;PARTSTAT=NEEDS-ACTION:mailto:{email_address(attendee)}',
+                          'SEQUENCE:0', 'TRANSP:OPAQUE'])
         programme = event.get('programme', {})
         description = '\n'.join(programme[key] for key in ('topic', 'presenters', 'agenda') if programme.get(key))
         if description:
@@ -421,7 +434,7 @@ def invitation_url(config, invite):
     return config['site_url'] + 'event.html?' + urlencode(dict(event=config.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(token=invite['token']))
 
 
-def message_content(config, local, invite, kind, state=None, later=None, draft=None):
+def message_content(config, local, invite, kind, state=None, later=None, draft=None, calendar_events=None):
     poll = invite['poll']
     state = state or {}
     draft = draft if draft is not None else mail_templates.default_template(kind, config)
@@ -430,7 +443,7 @@ def message_content(config, local, invite, kind, state=None, later=None, draft=N
         hours = poll.get('daily_hours')
         timing = f', {daily_hours_label(hours)}' if hours else ''
         onsite_note = f' Each option covers {poll["duration_days"]} consecutive dates{timing}. Please respond for the whole meeting.'
-    if kind == 'confirm' or kind == 'present' and state.get('final_event'):
+    if kind == 'confirm' or kind in {'present', 'invite'} and state.get('final_event'):
         event = state.get('final_event')
         if not event:
             raise ValueError('Finalize a time for everyone before sending confirmations.')
@@ -475,8 +488,18 @@ def message_content(config, local, invite, kind, state=None, later=None, draft=N
     html_body = ('<html><body><div style="font:15px/1.7 Arial,sans-serif;max-width:600px;color:#152d35">'
                  + paragraphs + '</div></body></html>')
     attachments = []
-    if kind == 'confirm':
-        attachments.append(dict(name='d3-seminar.ics', content=calendar_bytes(state['final_event'], state.get('finalized_at')).decode()))
+    if kind in {'confirm', 'invite'} and state.get('final_event'):
+        scheduled = calendar_events or [dict(event=state['final_event'], finalized_at=state.get('finalized_at'))]
+        for meeting in scheduled:
+            event = meeting['event']
+            for uid, start, end, title in calendar_sessions(event):
+                single = {key:value for key,value in event.items() if key not in {'daily_hours', 'duration_days'}}
+                single.update(campaign_id=uid, start=start.isoformat(), end=end.isoformat(), title=title)
+                attachments.append(dict(name='d3-seminar.ics', method='REQUEST',
+                    content=calendar_bytes(single, meeting.get('finalized_at'), local['sender_email'], invite['email']).decode()))
+        if len(attachments) > 1:
+            for index, attachment in enumerate(attachments, 1):
+                attachment['name'] = f'd3-seminar-{index}.ics'
     return dict(to=invite['email'], subject=subject, body=body, html=html_body, attachments=attachments)
 
 
@@ -496,6 +519,8 @@ def eligible(invite, response, kind, state=None):
     elif kind == 'present':
         if invite.get('role') != 'student':
             return False
+    elif kind == 'invite' and state.get('final_event'):
+        key = 'confirm:' + state['finalized_at']
     else:
         if state.get('final_event') or state.get('availability_closed'):
             return False

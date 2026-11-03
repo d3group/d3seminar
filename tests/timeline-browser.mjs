@@ -251,6 +251,28 @@ try {
   assert.equal(onsiteSaved.answers[disabledIds[0]], 'unavailable');
   assert.equal(onsiteSaved.comment, 'Keep the later April choice.');
   assert.equal(await disabledCards.locator('input:checked').count(), 1);
+  for (const confirmedId of ['seminar-2', 'seminar-3']) {
+    const before = await api('invitation', {token, event_id:confirmedId});
+    const dashboard = await api('admin', {action:'dashboard', secret, event_id:confirmedId});
+    const chosen = before.poll.slots[0].id;
+    await api('admin', {action:'finalize', secret, event_id:confirmedId, slot_id:chosen,
+      snapshot:dashboard.snapshot, organizer_confirmed:true});
+    const after = await api('invitation', {token, event_id:confirmedId});
+    assert.deepEqual(after.answers, before.answers);
+    assert.equal(after.comment, before.comment);
+    assert.deepEqual(after.poll, before.poll);
+    for (const address of [details.home, details.base, details.base + 'event.html?event=' + confirmedId + '#token=' + token]) {
+      await page.goto(address);
+      const calendar = address.includes('event.html') ? page.locator('#availability-calendar')
+        : page.locator(`.event-card[data-event="${confirmedId}"] .event-calendar`);
+      await calendar.locator('button.date-confirmed').waitFor({state:'attached'});
+      assert.equal(await calendar.locator('button.date-confirmed').count(), 1);
+      assert.equal(await calendar.locator('button.calendar-date:disabled').count(), before.poll.slots.length - 1);
+      const shadow = await calendar.locator('button.date-confirmed').evaluate(node => getComputedStyle(node).boxShadow);
+      assert.notEqual(shadow, 'none');
+      assert.equal(await calendar.locator('button.calendar-date:enabled').count(), 1);
+    }
+  }
   assert.deepEqual(errors, []);
   console.log('Programme carousel and vertical Agenda: layout, navigation, drafts, saved responses, deep links, talk editing, mobile and reduced motion passed.');
 } finally {

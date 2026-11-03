@@ -123,8 +123,8 @@ function renderCard(entry, invitation) {
     entry.link.textContent = invitation.updated_at ? (responseComplete(invitation) ? 'Update availability' : 'Finish your response') : 'Share availability';
   }
   entry.link.setAttribute('aria-label', `${entry.link.textContent} for ${entry.event.name}`);
-  renderCalendar(entry.calendar, {...entry.event, ...invitation.poll, slots:finalEvent ? [finalEvent] : invitation.poll.slots}, {
-    confirmed:Boolean(finalEvent), closed:Boolean(invitation.state.availability_closed), disabledSlotIds:invitation.state.disabled_slot_ids, people:invitation.participants,
+  renderCalendar(entry.calendar, {...entry.event, ...invitation.poll}, {
+    confirmed:Boolean(finalEvent), confirmedSlotId:finalEvent?.slot_id, closed:Boolean(invitation.state.availability_closed), disabledSlotIds:invitation.state.disabled_slot_ids, people:invitation.participants,
     onSelect:date => {
       const destination = new URL(eventHref(entry.event.id, token), location.href);
       destination.searchParams.set('date', date);
@@ -207,9 +207,9 @@ async function start() {
         const response = await apiFetch('public-event', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({event_id:entry.event.id})});
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || 'Public responses could not be loaded.');
-        entry.event = {...entry.event, ...data.poll, slots:data.final_event ? [data.final_event] : data.poll.slots};
+        entry.event = {...entry.event, ...data.poll};
         renderDeadline(entry, data.poll, data.final_event, false, data.availability_closed);
-        renderCalendar(entry.calendar, entry.event, {confirmed:Boolean(data.final_event), closed:Boolean(data.availability_closed), disabledSlotIds:data.disabled_slot_ids, totals:data.totals});
+        renderCalendar(entry.calendar, entry.event, {confirmed:Boolean(data.final_event), confirmedSlotId:data.final_event?.slot_id, closed:Boolean(data.availability_closed), disabledSlotIds:data.disabled_slot_ids, totals:data.totals});
         renderAgendaPreview(entry.agenda, entry.event, data.presentations);
       } catch {
         entry.calendar.append(element('p', 'Availability totals could not be loaded. Please refresh to try again.', 'notice error'));

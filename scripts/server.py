@@ -265,7 +265,9 @@ class Store:
         return dict(poll=poll, state=state, participants=people, slots=slots, registered=len(records), required=required,
                     completed=sum(p['complete'] for p in people), snapshot=seminar.event_revision(dict(records=records, state=state)))
 
-    def select(self, action, slot_id, snapshot):
+    def select(self, action, slot_id, snapshot, organizer_confirmed=False, title=None):
+        if not isinstance(organizer_confirmed, bool):
+            raise ValueError('Confirm the organizer decision explicitly.')
         with self.session(write=True) as session:
             dashboard = self.dashboard(session)
             if dashboard['snapshot'] != snapshot:
@@ -278,10 +280,17 @@ class Store:
             slot = next((s for s in dashboard['slots'] if s['id'] == slot_id), None)
             if not slot:
                 raise ValueError('Choose a candidate time.')
+            if slot_id in state.get('disabled_slot_ids', []):
+                raise ValueError('This option is disabled.')
             if action == 'finalize':
-                if not slot['ready']:
+                if not slot['ready'] and not organizer_confirmed:
                     raise ValueError('Everyone in the required group must mark this time Available before it can be finalized.')
-                state.update(final_event=seminar.event_data(dashboard['poll'], slot), finalized_at=datetime.now(timezone.utc).isoformat())
+                event = seminar.event_data(dashboard['poll'], slot)
+                if title:
+                    event['title'] = title
+                state.update(final_event=event, finalized_at=datetime.now(timezone.utc).isoformat(),
+                             confirmation_method='organizer' if organizer_confirmed else 'unanimous',
+                             disabled_slot_ids=[s['id'] for s in dashboard['poll']['slots'] if s['id'] != slot_id])
             else:
                 raise ValueError('Unknown selection action.')
             self.write_state(session, state)
@@ -576,7 +585,9 @@ def create_app(service):
                         destination=invitation_result(destination, data['token'], include_presentations=True))
         if action == 'finalize':
             with organizer.lock():
-                return dict(ok=True, state=store.select(action, data.get('slot_id'), data.get('snapshot')))
+                config = seminar.event_config(service.config, data.get('event_id'))
+                return dict(ok=True, state=store.select(action, data.get('slot_id'), data.get('snapshot'),
+                    data.get('organizer_confirmed', False), title='D3 · ' + config.get('name', config['title'])))
         if action == 'close_availability':
             with organizer.lock():
                 return dict(ok=True, state=store.close_availability(data.get('snapshot')))

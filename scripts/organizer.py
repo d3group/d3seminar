@@ -245,6 +245,21 @@ class Organizer:
         seminar.event_config(self.config, event_id)
         return event_id
 
+    def confirmed_calendars(self, event_id, kind):
+        if kind not in {'invite', 'confirm'} or not self.stores[event_id].dashboard()['state'].get('final_event'):
+            return []
+        config = seminar.event_config(self.config, event_id)
+        calendars = []
+        for entry in self.config['events']:
+            if entry['id'] != event_id and not (config.get('kind') == entry.get('kind') == 'seminar'):
+                continue
+            dashboard = self.stores[entry['id']].dashboard()
+            state = dashboard['state']
+            if state.get('final_event') and not state.get('archived'):
+                calendars.append(dict(event=state['final_event'], finalized_at=state['finalized_at'],
+                                      participant_ids={person['id'] for person in dashboard['participants']}))
+        return calendars
+
     def mail_queue(self, event_id, kind):
         from email_queue import draft
         from mail_templates import sender_display_name
@@ -278,6 +293,7 @@ class Organizer:
         saved = draft(self, event_id, kind)
         audience = saved['audience']
         template = {key:saved[key] for key in ('subject', 'body')}
+        calendars = self.confirmed_calendars(event_id, kind)
         messages = []
         for invite in invitations:
             if audience == 'professors' and responses.get(invite['id'], {}).get('role') != 'professor':
@@ -287,7 +303,8 @@ class Organizer:
                 continue
             alternatives = [e for e in later if e['id'] in registered.get(invite['email'], set())]
             row = dict(id=invite['id'], key=key, name=invite['name'],
-                       **seminar.message_content(config, local, invite, kind, dashboard['state'], alternatives, template))
+                       **seminar.message_content(config, local, invite, kind, dashboard['state'], alternatives, template,
+                           [meeting for meeting in calendars if invite['id'] in meeting['participant_ids']]))
             row['preview'] = seminar.event_revision(dict(message=row, sender=local['sender_email'], sender_name=sender_name, audience=audience))
             messages.append(row)
         return dict(event_id=event_id, event_name=config.get('name', config['title']), kind=kind, messages=messages,

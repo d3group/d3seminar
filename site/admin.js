@@ -31,9 +31,10 @@ async function api(action, data = {}) {
   return result;
 }
 async function choose(slot, button) {
+  if (!slot.ready && !confirm('Not everyone has marked this time Available. Confirm that the organizers have agreed this date separately. Saved responses will be preserved.')) return;
   button.disabled = true;
   try {
-    await api('finalize', {slot_id:slot.id, snapshot:dashboard.snapshot});
+    await api('finalize', {slot_id:slot.id, snapshot:dashboard.snapshot, organizer_confirmed:!slot.ready});
     await refresh();
     $('mail-kind').value = 'confirm';
     updateMailKind();
@@ -62,8 +63,8 @@ function render() {
     for (const key of ['available', 'unavailable', 'unknown']) row.append(element('td', slot[key], key));
     const cell = document.createElement('td');
     if (d.state.final_event) cell.textContent = d.state.final_event.slot_id === slot.id ? 'Selected' : 'Poll closed';
-    else if (slot.ready) {
-      const button = element('button', 'Finalize this time', 'slot-action');
+    else if (!d.state.archived && !d.state.availability_closed && !d.state.disabled_slot_ids?.includes(slot.id)) {
+      const button = element('button', slot.ready ? 'Finalize this time' : 'Confirm organizer decision', 'slot-action');
       button.addEventListener('click', () => choose(slot, button)); cell.append(button);
     } else cell.textContent = 'Not ready';
     row.append(cell); $('slot-rows').append(row);

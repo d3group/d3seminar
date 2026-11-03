@@ -56,6 +56,56 @@ class AdminPanelTests(unittest.TestCase):
         payload = {key:person[key] for key in ('id', 'name', 'email', 'role', 'is_organizer', 'is_archived', 'events') if key in person}
         return self.api('save_user', user=dict(payload, **changes), version=self.roster()['version'])
 
+    def test_organizer_confirmation_preserves_responses_and_attaches_both_meetings(self):
+        from email import policy
+        from email.parser import BytesParser
+
+        for event_id in ('seminar-2', 'seminar-3'):
+            store = self.service.stores[event_id]
+            invite = store.invitation('A'*43)
+            chosen = invite['poll']['slots'][0]['id']
+            store.respond(dict(token='A'*43, revision=invite['revision'], response_version=invite['response_version'],
+                               comment='Keep my note.', **{'answer:' + chosen:'unavailable'}))
+            before = store.responses()
+            poll = store.dashboard()['poll']
+            snapshot = store.dashboard()['snapshot']
+            fields = dict(event_id=event_id, slot_id=chosen, snapshot=snapshot)
+            self.assertEqual(self.api('finalize', **fields).status_code, 400)
+            self.assertEqual(self.api('finalize', token='B'*43, organizer_confirmed=True, **fields).status_code, 403)
+            self.assertEqual(self.api('finalize', organizer_confirmed='true', **fields).status_code, 400)
+            result = self.api('finalize', organizer_confirmed=True, **fields)
+            self.assertEqual(result.status_code, 200, result.json)
+            state = store.dashboard()['state']
+            self.assertEqual(state['confirmation_method'], 'organizer')
+            self.assertEqual(state['final_event']['slot_id'], chosen)
+            self.assertEqual(state['final_event']['title'], 'D3 · ' + seminar.event_config(self.service.config, event_id)['name'])
+            self.assertEqual(set(state['disabled_slot_ids']), {s['id'] for s in poll['slots']} - {chosen})
+            self.assertEqual(store.responses(), before)
+            self.assertEqual(store.dashboard()['poll'], poll)
+            with self.assertRaisesRegex(ValueError, 'finalized'):
+                store.respond(dict(token='A'*43, partial='true', revision=invite['revision'], **{'answer:' + chosen:'available'}))
+
+        for kind in ('invite', 'confirm'):
+            plan = self.service.organizer.preview_mail('seminar-2', kind)
+            row = plan['messages'][0]
+            self.assertEqual(len(row['attachments']), 2)
+            self.assertNotIn('Please set your preferences', row['body'])
+            expected_events = [self.service.stores[event_id].dashboard()['state']['final_event'] for event_id in ('seminar-2', 'seminar-3')]
+            wire = mailer.message(plan, row).as_bytes()
+            mail = BytesParser(policy=policy.default).parsebytes(wire)
+            for part, event in zip(mail.iter_attachments(), expected_events, strict=True):
+                self.assertEqual(part.get_content_type(), 'text/calendar')
+                self.assertEqual(part.get_param('method'), 'REQUEST')
+                calendar = part.get_payload(decode=True).decode().replace('\r\n ', '')
+                self.assertEqual(calendar.count('BEGIN:VEVENT'), 1)
+                self.assertIn('UID:' + event['campaign_id'] + '@d3seminar', calendar)
+                self.assertIn('ORGANIZER:mailto:organizer@example.org', calendar)
+                self.assertIn('ATTENDEE;RSVP=TRUE;PARTSTAT=NEEDS-ACTION:mailto:ada@example.org', calendar)
+            if kind == 'invite':
+                invite_key = row['key']
+            else:
+                self.assertEqual(row['key'], invite_key)
+
     def test_users_permissions_handover_and_safe_removal(self):
         for action in ('users', 'save_user', 'email_preview', 'email_draft', 'email_example', 'save_email_draft', 'queue_mail', 'mail_batches', 'cancel_mail'):
             self.assertEqual(self.api(action, token='B'*43).status_code, 403)
@@ -320,6 +370,19 @@ class AdminPanelTests(unittest.TestCase):
             invalid = dict(edited, version=saved['version'], **changes)
             self.assertEqual(self.api('save_email_draft', **invalid).status_code, 400)
         self.assertEqual(self.api('email_draft', kind='invite', mail_event='seminar-1').json, saved)
+
+    def test_invitation_update_can_omit_deadline_but_keeps_personal_link(self):
+        draft = self.api('email_draft', kind='invite', mail_event='seminar-2').json
+        content = dict(subject='Seminar planning update', body='Hello {first_name},\n\nAdd your talk: {presentation_link}\nYour event: {invitation_link}')
+        saved = self.api('save_email_draft', kind='invite', mail_event='seminar-2', version=draft['version'], **content)
+        self.assertEqual(saved.status_code, 200, saved.json)
+        self.assertEqual(saved.json['required_fields'], ['invitation_link'])
+        example = self.api('email_example', kind='invite', mail_event='seminar-2', **content)
+        self.assertEqual(example.status_code, 200, example.json)
+        for kind in ('initial', 'remind'):
+            self.assertEqual(self.api('email_example', kind=kind, mail_event='seminar-1', **content).status_code, 400)
+        self.assertEqual(self.api('email_example', kind='invite', mail_event='seminar-2',
+                                 subject='Missing link', body='Hello {first_name}').status_code, 400)
 
     def test_unsaved_email_examples_use_sender_renderer_without_changing_data(self):
         before = self.store.dashboard()

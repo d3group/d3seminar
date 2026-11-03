@@ -27,7 +27,10 @@ def message(plan, row):
     mail.set_content(row['body'])
     mail.add_alternative(row['html'], subtype='html')
     for part in row['attachments']:
-        mail.add_attachment(part['content'].encode(), maintype='text', subtype='calendar', filename=part['name'])
+        params = {'charset':'utf-8'}
+        if part.get('method'):
+            params['method'] = part['method']
+        mail.add_attachment(part['content'].encode(), maintype='text', subtype='calendar', filename=part['name'], params=params)
     return mail
 
 

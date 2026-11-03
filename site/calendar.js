@@ -28,13 +28,16 @@ function voteRing(people, slots) {
   }
   return svg;
 }
-export function renderCalendar(container, event, {confirmed = false, closed = false, disabledSlotIds = [], people = null, totals = null, onSelect = null, openDate = null, responseContainer = null, onInspect = () => {}} = {}) {
+export function renderCalendar(container, event, {confirmed = false, confirmedSlotId = null, closed = false, disabledSlotIds = [], people = null, totals = null, onSelect = null, openDate = null, responseContainer = null, onInspect = () => {}} = {}) {
+  const selectedId = confirmedSlotId || (confirmed ? (event.slots[0]?.id || event.slots[0]?.slot_id) : null);
   const disabled = new Set(disabledSlotIds);
+  if (confirmed) event.slots.forEach(slot => { if ((slot.id || slot.slot_id) !== selectedId) disabled.add(slot.id || slot.slot_id); });
   const canInspect = Boolean(people || totals);
   const countsFor = slot => totals ? totals[slot.id || slot.slot_id] : voteCounts(people || [], slot, event.required_participants);
   const counts = new Map(event.slots.filter(slot => !disabled.has(slot.id)).map(slot => [slot, countsFor(slot).available]));
   const highest = Math.max(0, ...counts.values());
-  const standing = slots => confirmed ? 'confirmed' : highest > 0 && slots.some(slot => counts.get(slot) === highest) ? 'leading' : 'proposed';
+  const standing = slots => confirmed ? (slots.some(slot => (slot.id || slot.slot_id) === selectedId) ? 'confirmed' : 'proposed')
+    : highest > 0 && slots.some(slot => counts.get(slot) === highest) ? 'leading' : 'proposed';
   const standingNames = {proposed:'Proposed', leading:'Leading so far', confirmed:'Confirmed'};
   const dateFormat = new Intl.DateTimeFormat('en-GB', {timeZone:event.timezone, year:'numeric', month:'2-digit', day:'2-digit'});
   const dateKey = value => {
@@ -52,7 +55,7 @@ export function renderCalendar(container, event, {confirmed = false, closed = fa
     }
   }
   container.replaceChildren();
-  container.classList.toggle('calendar-closed', closed);
+  container.classList.toggle('calendar-closed', closed && !confirmed);
   const panel = element('section', '', 'calendar-votes');
   panel.id = 'votes-' + event.id; panel.hidden = true; panel.tabIndex = -1;
   panel.setAttribute('aria-label', 'Responses for ' + event.name);
@@ -142,7 +145,7 @@ export function renderCalendar(container, event, {confirmed = false, closed = fa
           cell.dataset.date = key;
           if (weekend || holiday) cell.classList.add('calendar-day-off');
           const slots = dates.get(key);
-          const unavailable = closed || slots?.every(slot => disabled.has(slot.id));
+          const unavailable = (closed && !confirmed) || slots?.every(slot => disabled.has(slot.id || slot.slot_id));
           if (slots && unavailable) cell.classList.add('calendar-option-disabled');
           const state = slots ? standing(slots) : null;
           if (event.duration_days > 1 && slots) {
