@@ -256,7 +256,7 @@ class Organizer:
             dashboard = self.stores[entry['id']].dashboard()
             state = dashboard['state']
             if state.get('final_event') and not state.get('archived'):
-                calendars.append(dict(event=state['final_event'], finalized_at=state['finalized_at'],
+                calendars.append(dict(event_id=entry['id'], event=state['final_event'], finalized_at=state['finalized_at'],
                                       participant_ids={person['id'] for person in dashboard['participants']}))
         return calendars
 

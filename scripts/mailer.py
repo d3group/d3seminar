@@ -51,9 +51,13 @@ def messages(plan, row):
         summary = re.search(r'^SUMMARY:(.*)$', unfolded, re.MULTILINE)
         title = summary[1].strip() if summary else 'D3 seminar'
         title = re.sub(r'\\([nN,;\\])', lambda match: ' ' if match[1] in 'nN' else match[1], title)
-        body = f'Calendar invitation for {title}.\n\nThe seminar date is confirmed. This invitation is for your calendar.'
+        body = f'Calendar invitation for {title}.'
+        html_body = '<p>' + html.escape(body) + '</p>'
+        for label, url in part.get('links', []):
+            body += '\n\n' + label + ': ' + url
+            html_body += '<p><a href="' + html.escape(url, quote=True) + '">' + html.escape(label) + '</a></p>'
         mails.append(message(plan, dict(row, subject=title + ' · Calendar invitation', body=body,
-                                       html='<p>' + html.escape(body).replace('\n\n', '</p><p>') + '</p>', attachments=[part])))
+                                       html=html_body, attachments=[part])))
     return mails
 
 

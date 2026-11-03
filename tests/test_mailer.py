@@ -220,7 +220,7 @@ class MailerTests(unittest.TestCase):
         self.assertEqual(len(bundle), 3)
         self.assertEqual(len({mail['Message-ID'] for mail in bundle}), 3)
         self.assertEqual(bundle[0].get_body(preferencelist=('plain',)).get_content().rstrip(), row['body'].rstrip())
-        for request, part in zip(bundle[1:], row['attachments'], strict=True):
+        for event_id, request, part in zip(('seminar-1', 'seminar-2'), bundle[1:], row['attachments'], strict=True):
             self.assertEqual(request.get_content_type(), 'multipart/alternative')
             self.assertEqual([p.get_content_type() for p in request.iter_parts()], ['text/plain', 'text/html', 'text/calendar'])
             calendar = list(request.iter_parts())[-1]
@@ -228,6 +228,15 @@ class MailerTests(unittest.TestCase):
             self.assertEqual(calendar.get_param('method'), 'REQUEST')
             self.assertEqual(request['To'], row['to'])
             self.assertFalse(request.get_all('Cc') or request.get_all('Bcc'))
+            plain = request.get_body(preferencelist=('plain',)).get_content()
+            html = request.get_body(preferencelist=('html',)).get_content()
+            unfolded = part['content'].replace('\r\n ', '')
+            for label, key in [('View agenda', 'event'), ('Add your talk', 'present')]:
+                url = f'http://localhost:8765/agenda.html?{key}={event_id}#token=' + 'A'*43
+                self.assertIn(label + ': ' + url, plain)
+                self.assertIn(f'<a href="{url}">{label}</a>', html)
+                self.assertIn(label + ': ' + url, unfolded)
+            self.assertNotIn('This invitation is for your calendar', plain)
 
         with patch.object(mailer.getpass, 'getpass', return_value='local-only'), patch.object(mailer.smtplib, 'SMTP_SSL') as smtp, contextlib.redirect_stdout(io.StringIO()):
             client = smtp.return_value.__enter__.return_value

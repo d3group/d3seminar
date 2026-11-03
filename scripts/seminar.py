@@ -237,6 +237,8 @@ def calendar_bytes(event, created_at=None, organizer=None, attendee=None):
                           f'SEQUENCE:{event.get("calendar_sequence", 0)}', 'TRANSP:OPAQUE'])
         programme = event.get('programme', {})
         description = '\n'.join(programme[key] for key in ('topic', 'presenters', 'agenda') if programme.get(key))
+        for label, url in event.get('calendar_links', []):
+            description += ('\n\n' if description else '') + label + ': ' + url
         if description:
             lines.append('DESCRIPTION:' + escape(description))
         lines.extend(['STATUS:CONFIRMED', 'END:VEVENT'])
@@ -500,10 +502,14 @@ def message_content(config, local, invite, kind, state=None, later=None, draft=N
         scheduled = calendar_events or [dict(event=state['final_event'], finalized_at=state.get('finalized_at'))]
         for meeting in scheduled:
             event = meeting['event']
+            event_id = meeting.get('event_id', config.get('event_id', 'seminar-1'))
+            calendar_links = [(label, config['site_url'] + 'agenda.html?' + urlencode({key:event_id})
+                               + '#' + urlencode(dict(token=invite['token'])))
+                              for label, key in [('View agenda', 'event'), ('Add your talk', 'present')]]
             for uid, start, end, title in calendar_sessions(event):
                 single = {key:value for key,value in event.items() if key not in {'daily_hours', 'duration_days', 'calendar_buffer_minutes'}}
-                single.update(campaign_id=uid, start=start.isoformat(), end=end.isoformat(), title=title)
-                attachments.append(dict(name='d3-seminar.ics', method='REQUEST', calendar_buffer_minutes=event.get('calendar_buffer_minutes', 0),
+                single.update(campaign_id=uid, start=start.isoformat(), end=end.isoformat(), title=title, calendar_links=calendar_links)
+                attachments.append(dict(name='d3-seminar.ics', method='REQUEST', links=calendar_links, calendar_buffer_minutes=event.get('calendar_buffer_minutes', 0),
                     content=calendar_bytes(single, meeting.get('finalized_at'), local['sender_email'], invite['email']).decode()))
         if len(attachments) > 1:
             for index, attachment in enumerate(attachments, 1):
