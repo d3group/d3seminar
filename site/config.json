@@ -94,7 +94,7 @@
     },
     {
       "id": "seminar-2",
-      "name": "Seminar 2",
+      "name": "Seminar 1",
       "kind": "seminar",
       "description": "Our second research seminar. Share your availability for this session.",
       "campaign_id": "d3seminar-mvp-2",
@@ -125,7 +125,7 @@
     },
     {
       "id": "seminar-3",
-      "name": "Seminar 3",
+      "name": "Seminar 2",
       "kind": "seminar",
       "description": "The third research seminar. Help us choose a time everyone can attend.",
       "campaign_id": "d3seminar-mvp-3",

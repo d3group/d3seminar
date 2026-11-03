@@ -14,6 +14,15 @@ export function selectEvent(config, id = 'seminar-1') {
   return {...config, ...event, event_id:event.id};
 }
 
+export function activeEventId(config, id) {
+  for (const _ of config.archived_events || []) {
+    const archived = config.archived_events.find(event => event.id === id);
+    if (!archived) break;
+    id = archived.successor_event_id;
+  }
+  return id || config.events[0]?.id;
+}
+
 export function nextSeminar(entries, now = Date.now()) {
   let next, earliest = Infinity;
   for (const entry of entries) {
@@ -216,12 +225,17 @@ export function eventHref(id, token) {
   return 'event.html?' + new URLSearchParams({event:id}) + (token ? '#' + new URLSearchParams({token}) : '');
 }
 
+export function activeSlots(invitation) {
+  const disabled = new Set(invitation.state?.disabled_slot_ids || []);
+  return invitation.poll.slots.filter(slot => !disabled.has(slot.id));
+}
+
 export function answeredCount(invitation) {
-  return invitation.poll.slots.filter(slot => ['available', 'unavailable'].includes(invitation.answers[slot.id])).length;
+  return activeSlots(invitation).filter(slot => ['available', 'unavailable'].includes(invitation.answers[slot.id])).length;
 }
 
 export function responseComplete(invitation) {
-  return answeredCount(invitation) === invitation.poll.slots.length;
+  return answeredCount(invitation) === activeSlots(invitation).length;
 }
 
 export function eventFinished(invitation) {
@@ -231,7 +245,7 @@ export function eventFinished(invitation) {
 export function nextEvent(entries, currentId) {
   const index = entries.findIndex(entry => entry.event.id === currentId);
   const ordered = index < 0 ? entries : [...entries.slice(index + 1), ...entries.slice(0, index)];
-  return ordered.find(entry => entry.invitation && !eventFinished(entry.invitation));
+  return ordered.find(entry => entry.invitation && !entry.invitation.state.availability_closed && !eventFinished(entry.invitation));
 }
 
 export function voteCounts(people, slot, required) {
@@ -318,8 +332,8 @@ export function presentationProgress(entries) {
   const next = !seminar ? seminars[0] : !onsiteDone ? onsite : seminars.find(proposed);
   const text = seminar && onsiteDone ? 'Your seminar and onsite proposals are saved. You can add details and materials later.'
     : seminar ? 'Please propose a talk for the onsite.'
-    : onsiteDone ? 'Please propose a talk for at least one of the three seminars.'
-    : 'Please propose a talk for at least one of the three seminars and for the onsite.';
+    : onsiteDone ? 'Please propose a talk for at least one seminar.'
+    : 'Please propose a talk for at least one seminar and for the onsite.';
   return {seminar, onsite:onsiteDone, next:next?.event.id, text,
     seminarDetailsPending:seminars.some(detailsPending), onsiteDetailsPending:Boolean(onsite && detailsPending(onsite))};
 }
@@ -354,9 +368,9 @@ export function showSavedResponse(entries, token) {
   if (!entry?.invitation?.updated_at) return;
   const banner = $('saved-response');
   const text = document.createElement('p');
-  const count = answeredCount(entry.invitation), total = entry.invitation.poll.slots.length;
+  const count = answeredCount(entry.invitation), total = activeSlots(entry.invitation).length;
   text.textContent = `Response saved for ${entry.event.name}. ${count} of ${total} options answered.`
-    + (count < total && !entry.invitation.state.final_event ? ' You can finish it later.' : '');
+    + (count < total && !entry.invitation.state.final_event && !entry.invitation.state.availability_closed ? ' You can finish it later.' : '');
   const link = element('a', 'Review saved response'); link.href = eventHref(savedId, token);
   banner.replaceChildren(text, link); banner.hidden = false;
 }

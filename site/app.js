@@ -1,9 +1,11 @@
 import {apiFetch, loadConfig, apiUrl, serviceNotice} from './api.js';
 import {renderCalendar} from './calendar.js';
-import {$, availabilityCard, availabilityChoice, germanSlotLabel, selectEvent, dailyHoursLabel, preserveInvitationLinks, eventHref, answeredCount, responseComplete, eventFinished, nextEvent, loadProgramme, programmeProgress, showSavedResponse, renderProgramme} from './shared.js';
+import {$, availabilityCard, availabilityChoice, germanSlotLabel, selectEvent, activeEventId, dailyHoursLabel, preserveInvitationLinks, eventHref, answeredCount, activeSlots, responseComplete, eventFinished, nextEvent, loadProgramme, programmeProgress, showSavedResponse, renderProgramme} from './shared.js';
 preserveInvitationLinks(new URLSearchParams(location.hash.slice(1)).get('token'));
 let config, poll, token, programme = [], saving = false, availabilityCalendar;
-const eventId = new URLSearchParams(location.search).get('event') || 'seminar-1';
+let disabledSlots = new Set();
+const optionCount = () => poll.slots.filter(slot => !disabledSlots.has(slot.id)).length;
+let eventId = new URLSearchParams(location.search).get('event');
 const choices = [['available', 'Available'], ['unavailable', 'Unavailable']];
 const fmt = (value, options) => new Intl.DateTimeFormat('de-DE', {timeZone:poll.timezone, ...options}).format(new Date(value));
 const date = value => fmt(value, {day:'2-digit', month:'2-digit', year:'numeric'});
@@ -34,8 +36,8 @@ function renderIntroduction(invitation) {
 }
 
 function progress(edited = false) {
-  const answered = $('poll-options').querySelectorAll('input:checked').length;
-  $('answer-progress').textContent = `${answered} of ${poll.slots.length} options answered. ${answered < poll.slots.length ? 'You can save now and finish later.' : 'Ready to save.'}`;
+  const answered = $('poll-options').querySelectorAll('input:checked:not(:disabled)').length;
+  $('answer-progress').textContent = `${answered} of ${optionCount()} options answered. ${answered < optionCount() ? 'You can save now and finish later.' : 'Ready to save.'}`;
   if (edited) {
     $('status-pill').textContent = 'Unsaved changes';
     $('saved-response').hidden = true;
@@ -53,14 +55,14 @@ function renderJourney() {
     if (event.id === eventId) label.setAttribute('aria-current', 'step');
     const status = document.createElement('span');
     status.textContent = !invitation ? 'Unavailable' : invitation.state.final_event ? 'Confirmed'
-      : eventFinished(invitation) ? 'Complete' : invitation.updated_at ? `${answeredCount(invitation)}/${invitation.poll.slots.length} answered` : 'To do';
+      : invitation.state.availability_closed ? 'Closed' : eventFinished(invitation) ? 'Complete' : invitation.updated_at ? `${answeredCount(invitation)}/${activeSlots(invitation).length} answered` : 'To do';
     row.append(label, status); $('journey-events').append(row);
   }
   $('response-journey').hidden = false;
   const next = nextEvent(programme, eventId);
   $('submit-button').textContent = next ? `Save and continue to ${next.event.name}` : 'Save and return to programme';
   const current = programme.find(entry => entry.event.id === eventId).invitation;
-  $('continue-link').hidden = !current.state.final_event || !next;
+  $('continue-link').hidden = !(current.state.final_event || current.state.availability_closed) || !next;
   if (next) {
     $('continue-link').href = eventHref(next.event.id, token);
     $('continue-link').textContent = `Continue to ${next.event.name}`;
@@ -69,7 +71,7 @@ function renderJourney() {
 
 async function saveResponse(event) {
   event.preventDefault();
-  if (saving) return;
+  if (saving || programme.find(entry => entry.event.id === eventId)?.invitation.state.availability_closed) return;
   const advance = event.submitter?.value !== 'stay';
   const form = $('response-form');
   const body = new URLSearchParams(new FormData(form));
@@ -101,8 +103,8 @@ async function saveResponse(event) {
       location.assign(destination.href);
     } else {
       const count = answeredCount(current.invitation);
-      notice(`Response saved. Your availability is saved for ${count} of ${poll.slots.length} options.`
-        + (count < poll.slots.length ? ' You can finish the remaining options later.' : ' You can update it here.'));
+      notice(`Response saved. Your availability is saved for ${count} of ${optionCount()} options.`
+        + (count < optionCount() ? ' You can finish the remaining options later.' : ' You can update it here.'));
     }
   } catch (error) {
     notice(error.message, true);
@@ -121,6 +123,8 @@ function renderPoll(answers = {}) {
   for (const slot of poll.slots) {
     const fieldset = availabilityCard(slot, poll.timezone, poll.daily_hours);
     fieldset.dataset.slotId = slot.id;
+    fieldset.disabled = disabledSlots.has(slot.id);
+    fieldset.classList.toggle('is-disabled', fieldset.disabled);
     const heading = fieldset.querySelector('.poll-option-heading');
     const inspect = document.createElement('button');
     inspect.type = 'button'; inspect.className = 'poll-option-heading response-toggle';
@@ -129,6 +133,7 @@ function renderPoll(answers = {}) {
     inspect.setAttribute('aria-expanded', 'false');
     inspect.append(...heading.childNodes); heading.replaceWith(inspect);
     const showResponses = () => {
+      if (disabledSlots.has(slot.id)) return;
       availabilityCalendar.showSlot(slot.id, inspect);
       const panel = $('availability-responses').querySelector('.calendar-votes:not([hidden])');
       panel?.scrollIntoView({block:'nearest', behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
@@ -144,6 +149,7 @@ function renderPoll(answers = {}) {
     }
     const clear = document.createElement('button');
     clear.type = 'button'; clear.className = 'clear-answer'; clear.textContent = 'Clear';
+    clear.hidden = disabledSlots.has(slot.id);
     clear.setAttribute('aria-label', `Clear answer for ${date(slot.start)} at ${time(slot.start)}`);
     clear.addEventListener('click', () => { row.querySelectorAll('input').forEach(input => input.checked = false); progress(true); });
     fieldset.append(row, clear); $('poll-options').append(fieldset);
@@ -156,7 +162,7 @@ function renderAvailabilityCalendar(invitation) {
   const container = $('availability-calendar');
   container.hidden = false;
   availabilityCalendar = renderCalendar(container, {...config, ...poll, slots:final ? [final] : poll.slots}, {
-    confirmed:Boolean(final), people:invitation.participants,
+    confirmed:Boolean(final), closed:Boolean(invitation.state.availability_closed), disabledSlotIds:invitation.state.disabled_slot_ids, people:invitation.participants,
     responseContainer:final ? null : $('availability-responses'),
     openDate:new URLSearchParams(location.search).get('date'),
     onInspect:slots => {
@@ -185,7 +191,14 @@ async function start() {
     location.replace('./?' + new URLSearchParams({event:eventId}));
     return;
   }
-  config = selectEvent(await loadConfig(), eventId); poll = config;
+  const programmeConfig = await loadConfig();
+  const activeId = activeEventId(programmeConfig, eventId);
+  if (activeId !== eventId) {
+    const url = new URL(location.href); url.searchParams.set('event', activeId); url.searchParams.delete('date');
+    history.replaceState(null, '', url);
+  }
+  eventId = activeId;
+  config = selectEvent(programmeConfig, eventId); poll = config;
   document.title = config.name + ' · ' + config.semester;
   $('event-semester').textContent = config.semester;
   $('event-title').textContent = config.name;
@@ -209,7 +222,7 @@ async function start() {
   $('response-form').addEventListener('input', () => progress(true));
   for (const answer of ['available', 'unavailable']) {
     $(`all-${answer}`).addEventListener('click', () => {
-      $('poll-options').querySelectorAll(`input[value="${answer}"]`).forEach(input => input.checked = true); progress(true);
+      $('poll-options').querySelectorAll(`input[value="${answer}"]:not(:disabled)`).forEach(input => input.checked = true); progress(true);
     });
   }
   $('response-form').addEventListener('submit', saveResponse);
@@ -220,7 +233,7 @@ async function start() {
   if (!invitation) throw new Error(current.error || 'Your invitation could not be loaded.');
   renderJourney(); showSavedResponse(programme, token);
   // Read current options from the backend, so existing email links survive a new round.
-  poll = invitation.poll; renderPoll(invitation.answers);
+  poll = invitation.poll; disabledSlots = new Set(invitation.state.disabled_slot_ids || []); renderPoll(invitation.answers);
   renderAvailabilityCalendar(invitation);
   renderIntroduction(invitation);
   $('response-form').action = apiUrl('respond');
@@ -244,8 +257,25 @@ async function start() {
   }
   $('status-pill').textContent = invitation.updated_at ? 'Saved' : 'Not answered';
   $('response-form').hidden = false;
-  const count = Object.keys(invitation.answers).length;
-  notice(invitation.updated_at ? `Your saved answers are shown below (${count}/${poll.slots.length}). You can update them here.` : 'Nothing is preselected. Save and continue when you’re ready.');
+  if (state.availability_closed) {
+    $('status-pill').textContent = 'Closed';
+    $('card-title').textContent = 'Your saved availability';
+    greet(invitation.name.trim().split(/\s+/)[0], 'Availability is closed. Your saved choices are shown below.');
+    $('poll-deadline').hidden = true;
+    $('poll-help').hidden = true;
+    $('response-form').querySelectorAll('input[type="radio"]').forEach(input => input.disabled = true);
+    $('poll-options').querySelectorAll('.clear-answer').forEach(button => button.hidden = true);
+    $('all-available').parentElement.hidden = true;
+    $('submit-button').parentElement.hidden = true;
+    $('comment').readOnly = true;
+    $('comment').placeholder = '';
+    $('comment-hint').textContent = '(saved, read-only)';
+    $('answer-progress').textContent = `${answeredCount(invitation)} of ${optionCount()} options answered. No further changes allowed.`;
+    notice('Availability is closed. Saved choices and notes are preserved.');
+    return;
+  }
+  const count = answeredCount(invitation);
+  notice(invitation.updated_at ? `Your saved answers are shown below (${count}/${optionCount()}). You can update them here.` : 'Nothing is preselected. Save and continue when you’re ready.');
 
 }
 

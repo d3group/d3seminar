@@ -76,6 +76,66 @@ class AdminPanelTests(unittest.TestCase):
         self.assertEqual(self.api('users').status_code, 403)
         self.assertEqual(self.api('users', token=token).status_code, 200)
 
+    def test_disabled_options_preserve_choices_and_reject_stale_form_edits(self):
+        invite = self.store.invitation('A'*43)
+        slots = invite['poll']['slots']
+        old_id = slots[-1]['id']
+        self.store.respond(dict(token='A'*43, revision=invite['revision'], response_version=invite['response_version'],
+                                comment='Keep this note.', **{'answer:' + old_id:'unavailable'}))
+        before = self.store.responses()
+        snapshot = self.store.dashboard()['snapshot']
+        for invalid in ([slot['id'] for slot in slots], ['missing'], [old_id, old_id], None):
+            self.assertEqual(self.api('disable_options', slot_ids=invalid, snapshot=snapshot).status_code, 400)
+        self.assertEqual(self.api('disable_options', token='B'*43, slot_ids=[old_id], snapshot=snapshot).status_code, 403)
+        self.assertEqual(self.api('disable_options', slot_ids=[old_id], snapshot=snapshot).status_code, 200)
+        self.assertEqual(self.store.responses(), before)
+        invite = self.store.invitation('A'*43)
+        for partial in ('true', 'false'):
+            with self.assertRaisesRegex(ValueError, 'disabled'):
+                self.store.respond(dict(token='A'*43, revision=invite['revision'], response_version=invite['response_version'],
+                                        partial=partial, **{'answer:' + old_id:''}))
+        current = self.store.respond(dict(token='A'*43, revision=invite['revision'], response_version=invite['response_version'],
+                                          comment='Keep this note.', **{'answer:' + slot['id']:'available' for slot in slots[:-1]}))
+        self.assertEqual(current['answers'][old_id], 'unavailable')
+        self.assertEqual(current['comment'], 'Keep this note.')
+        self.assertTrue(self.store.dashboard()['participants'][0]['complete'])
+        self.assertFalse(self.store.dashboard()['slots'][-1]['ready'])
+        self.assertEqual(self.store.public_event(invite['poll'])['disabled_slot_ids'], [old_id])
+
+    def test_archive_carries_talk_forward_and_preserves_every_saved_choice(self):
+        before = {}
+        for event_id, store in self.service.stores.items():
+            invite = store.invitation('A'*43)
+            store.respond(dict(token='A'*43, partial='true', revision=invite['revision'],
+                               **{'answer:' + invite['poll']['slots'][0]['id']:'available'}))
+            before[event_id] = store.responses()
+        talk = presentations.save(self.store, 'A'*43, dict(title='Carry this talk', abstract='Keep the abstract.'))
+        snapshot = self.store.dashboard()['snapshot']
+        self.assertEqual(self.api('archive_event', token='B'*43, successor_event_id='seminar-2', snapshot=snapshot).status_code, 403)
+        self.assertEqual(self.api('archive_event', successor_event_id='seminar-2', snapshot=snapshot).status_code, 400)
+        source = self.store.invitation('A'*43, include_presentations=True)
+        moved = self.api('move_presentation', destination_event_id='seminar-2', participant_id='a'*24,
+                         version=source['presentation_order_version'])
+        self.assertEqual(moved.status_code, 200, moved.json)
+        self.assertEqual(moved.json['destination']['presentation'], talk)
+        self.assertEqual(self.api('archive_event', successor_event_id='seminar-2', snapshot=snapshot).status_code, 400)
+        result = self.api('archive_event', successor_event_id='seminar-2', snapshot=self.store.dashboard()['snapshot'])
+        self.assertEqual(result.status_code, 200, result.json)
+        self.assertTrue(result.json['state']['archived'])
+        config = self.client.get('/config.json', base_url='http://localhost:8765/').json
+        self.assertEqual([e['id'] for e in config['events']], ['seminar-2', 'seminar-3', 'onsite'])
+        self.assertEqual(config['archived_events'][0]['successor_event_id'], 'seminar-2')
+        self.assertEqual(self.service.organizer.upcoming_seminars()[0]['id'], 'seminar-2')
+        for event_id, store in self.service.stores.items():
+            self.assertEqual(store.responses(), before[event_id])
+        with self.assertRaisesRegex(ValueError, 'archived'):
+            presentations.save(self.store, 'A'*43, dict(title='Late submission'))
+        with self.assertRaisesRegex(ValueError, 'archived'):
+            self.service.organizer.preview_mail('seminar-1', 'present')
+        with self.assertRaisesRegex(ValueError, 'archived'):
+            presentations.move(self.service.stores['seminar-2'], self.store, 'a'*24,
+                               moved.json['destination']['presentation_order_version'])
+
     def test_profile_changes_preserve_answers_talks_and_stale_edits_fail(self):
         invite = self.store.invitation('A'*43)
         self.store.respond(dict(token='A'*43, partial='true', revision=invite['revision'],
@@ -164,6 +224,72 @@ class AdminPanelTests(unittest.TestCase):
             self.assertEqual(client.send_message.call_count, 1)
         batch = self.api('mail_batches').json['batches'][0]
         self.assertEqual(batch['counts']['sent'], 1)
+
+    def test_professor_audience_filters_preview_queue_and_local_sender(self):
+        result = self.save(dict(name='Professor Example', email='professor@example.org', role='Professor',
+                                is_organizer=False, is_archived=False, events=['seminar-1']))
+        self.assertEqual(result.status_code, 200, result.json)
+        everyone = self.api('email_preview', kind='invite', mail_event='seminar-1').json
+        self.assertEqual(len(everyone['messages']), 2)
+        draft = self.api('email_draft', kind='invite', mail_event='seminar-1').json
+        self.assertEqual(draft['audience'], 'all')
+        saved = self.api('save_email_draft', kind='invite', mail_event='seminar-1',
+                         subject=draft['subject'], body=draft['body'], version=draft['version'], audience='professors')
+        self.assertEqual(saved.status_code, 200, saved.json)
+        self.assertEqual(self.api('queue_mail', kind='invite', mail_event='seminar-1', version=everyone['version']).status_code, 400)
+        preview = self.api('email_preview', kind='invite', mail_event='seminar-1').json
+        self.assertEqual(preview['audience'], 'professors')
+        self.assertEqual([m['to'] for m in preview['messages']], ['professor@example.org'])
+        self.assertEqual(self.api('queue_mail', kind='invite', mail_event='seminar-1', version=preview['version']).status_code, 200)
+        self.assertEqual(self.api('mail_batches').json['batches'][0]['audience'], 'professors')
+        def local_api(settings, action, **data):
+            result = self.api(action, secret='operator-test', **data)
+            if not result.json.get('ok'):
+                raise ValueError(result.json.get('error'))
+            return result.json
+        with patch.object(mailer, 'api', side_effect=local_api), patch.object(mailer.smtplib, 'SMTP_SSL') as smtp, \
+             patch.object(mailer.getpass, 'getpass', return_value='test'), contextlib.redirect_stdout(io.StringIO()):
+            mailer.run(self.settings, self.root/'mail', 'queued', send=True)
+            client = smtp.return_value.__enter__.return_value
+            self.assertEqual(client.send_message.call_count, 1)
+            self.assertEqual(client.send_message.call_args.args[0]['To'], 'professor@example.org')
+
+    def test_professor_reminders_still_skip_completed_responses(self):
+        result = self.save(dict(name='Professor Example', email='professor@example.org', role='Professor',
+                                is_organizer=False, is_archived=False, events=['seminar-1']))
+        self.assertEqual(result.status_code, 200)
+        professor = next(p for p in self.roster()['users'] if p['role'] == 'Professor')
+        with self.store.session() as session:
+            token = session.get(User, professor['id']).token
+        invitation = self.store.invitation(token)
+        records = self.service.organizer.records('seminar-1')
+        for person in records:
+            person['deliveries']['invite:' + person['revision']] = dict(status='sent')
+        self.service.organizer.save_delivery_records('seminar-1', records)
+        draft = self.api('email_draft', kind='remind', mail_event='seminar-1').json
+        result = self.api('save_email_draft', kind='remind', mail_event='seminar-1',
+                          subject=draft['subject'], body=draft['body'], version=draft['version'], audience='professors')
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(len(self.api('email_preview', kind='remind', mail_event='seminar-1').json['messages']), 1)
+        self.store.respond(dict(token=token, revision=invitation['revision'], response_version=invitation['response_version'],
+                                **{'answer:' + slot['id']:'available' for slot in invitation['poll']['slots']}))
+        self.assertEqual(self.api('email_preview', kind='remind', mail_event='seminar-1').json['messages'], [])
+
+    def test_audience_change_invalidates_queued_messages_and_rejects_invalid_audience(self):
+        draft = self.api('email_draft', kind='initial', mail_event='seminar-1').json
+        preview = self.api('email_preview', kind='initial', mail_event='seminar-1').json
+        batch = self.api('queue_mail', kind='initial', mail_event='seminar-1', version=preview['version']).json['batch_id']
+        row = self.api('preview_queued', secret='operator-test').json['plans'][0]['messages'][0]
+        for audience in ('unknown', '', ['all']):
+            result = self.api('save_email_draft', kind='initial', mail_event='seminar-1',
+                              subject=draft['subject'], body=draft['body'], version=draft['version'], audience=audience)
+            self.assertEqual(result.status_code, 400)
+        self.assertEqual(self.api('save_email_draft', kind='initial', mail_event='seminar-1',
+                                 subject=draft['subject'], body=draft['body'], version=draft['version'], audience='professors').status_code, 200)
+        self.assertEqual(self.api('preview_queued', secret='operator-test').json['plans'], [])
+        claim = self.api('claim_mail', secret='operator-test', kind='initial', participant_id=row['id'],
+                         preview=row['preview'], message_id='<audience@example.org>', batch_id=batch)
+        self.assertFalse(claim.json['claimed'])
 
     def test_email_drafts_are_private_scoped_versioned_and_validated(self):
         for kind in ('initial', 'invite', 'remind', 'present', 'confirm'):

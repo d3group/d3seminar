@@ -326,6 +326,13 @@ a.progress-step:hover .progress-step-name { text-decoration: underline; }
 a.calendar-date { color: var(--link); border: 1.5px var(--date-line) var(--link); font-weight: 600; text-decoration: none; }
 button.calendar-date { position: relative; width: min(44px, 100%); padding: 0; background: none; border: 1.5px var(--date-line) var(--link); color: var(--link); font-weight: 600; }
 .calendar-date:is(a, button) { transition: background-color .15s ease, filter .15s ease; }
+.calendar-closed table { filter: grayscale(1); opacity: .65; }
+.calendar-closed button.calendar-date:disabled { opacity: 1; cursor: default; }
+.calendar-closed .vote-mark { pointer-events: none; }
+.calendar-option-disabled, .poll-option.is-disabled { filter: grayscale(1); opacity: .55; }
+.calendar-option-disabled button.calendar-date:disabled { opacity: 1; cursor: default; }
+.calendar-option-disabled .vote-mark { pointer-events: none; }
+.calendar-closed .calendar-option-disabled { filter: none; opacity: 1; }
 @media (hover: hover) {
   .calendar-date:is(a, button):not(:disabled):hover { background-color: #edf2f7; filter: brightness(.88); }
 }

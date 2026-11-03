@@ -81,6 +81,11 @@ def programme_state(state):
     return dict(state, final_event=event)
 
 
+def active_slots(poll, state):
+    disabled = set(state.get('disabled_slot_ids', []))
+    return [slot for slot in poll['slots'] if slot['id'] not in disabled]
+
+
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -492,9 +497,9 @@ def eligible(invite, response, kind, state=None):
         if invite.get('role') != 'student':
             return False
     else:
-        if state.get('final_event'):
+        if state.get('final_event') or state.get('availability_closed'):
             return False
-        if kind == 'remind' and all(answers.get(slot['id']) for slot in invite['poll']['slots']):
+        if kind == 'remind' and all(answers.get(slot['id']) for slot in active_slots(invite['poll'], state)):
             return False
         if kind == 'remind' and not any(deliveries.get(key, {}).get('status') == 'sent' for key in ('invite:' + revision, initial_key)):
             return False

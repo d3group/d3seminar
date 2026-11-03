@@ -1,0 +1,2 @@
+# Optional local calendar checker; not needed by the web or email services.
+exchangelib==5.6.0

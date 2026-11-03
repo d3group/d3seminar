@@ -40,7 +40,7 @@ def default_template(kind, config):
     if kind == 'present':
         body += ('Start with a title; your abstract, explainer and slides can follow later.\n'
                  'Add your presentation:\n{presentation_link}\n\n{later_options}\n\n'
-                 'Plan to contribute at least once across the three seminars and at the onsite meeting.\n\n')
+                 'Plan to contribute at least once across the seminars and at the onsite meeting.\n\n')
     else:
         body += 'Open your personal invitation:\n{invitation_link}\n\n'
     if kind == 'initial':

@@ -142,6 +142,115 @@ try {
   await page.goto(details.base + '?event=onsite');
   await shown(['seminar-3', 'onsite']);
   assert.equal(await page.locator('.calendar-response-form, [data-present]').count(), 0);
+  // Closing availability preserves saved choices, while the agenda remains editable.
+  const api = async (action, data) => {
+    const response = await page.request.post(details.api + 'api/' + action, {
+      headers:{Accept:'application/json'}, ...(action === 'respond' ? {form:data} : {data})});
+    const result = await response.json();
+    assert.equal(response.ok(), true, result.error);
+    return result;
+  };
+  const token = 'T'.repeat(43), event_id = 'seminar-1';
+  const invite = await api('invitation', {token, event_id});
+  const saved = await api('respond', {token, event_id, revision:invite.revision, response_version:invite.response_version,
+    comment:'Preserve this note.', ['answer:' + invite.poll.slots[0].id]:'available'});
+  for (const [person, title] of [['T', 'First proposal'], ['P', 'Second proposal']]) {
+    await api('presentation', {event_id, token:person.repeat(43), version:'', presentation:{title, visibility:'public'}});
+  }
+  const secret = new URLSearchParams(new URL(details.admin).hash.slice(1)).get('key');
+  const denied = await page.request.post(details.api + 'api/admin', {data:{action:'close_availability', token, event_id}});
+  assert.equal(denied.status(), 403);
+  const dashboard = await api('admin', {action:'dashboard', event_id, secret});
+  await api('admin', {action:'close_availability', event_id, secret, snapshot:dashboard.snapshot});
+  const rejected = await page.request.post(details.api + 'api/respond', {headers:{Accept:'application/json'}, form:{event_id, token, revision:invite.revision,
+    partial:'true', ['answer:' + invite.poll.slots[0].id]:'unavailable'}});
+  assert.equal(rejected.ok(), false);
+  assert.match((await rejected.json()).error, /closed/);
+  const after = await api('invitation', {token, event_id});
+  for (const key of ['answers', 'comment', 'updated_at', 'response_version']) assert.deepEqual(after[key], saved[key]);
+  await page.goto(details.invitation);
+  await page.locator('#status-pill').filter({hasText:'Closed'}).waitFor();
+  assert.equal(await page.locator('#poll-options input:enabled').count(), 0);
+  assert.equal(await page.locator('#poll-options input:checked').count(), 1);
+  assert.equal(await page.locator('#poll-options .clear-answer:visible').count(), 0);
+  assert.equal(await page.locator('#all-available').isVisible(), false);
+  assert.equal(await page.locator('#submit-button').isVisible(), false);
+  assert.equal(await page.locator('#comment').inputValue(), 'Preserve this note.');
+  assert.equal(await page.locator('#comment').getAttribute('readonly'), '');
+  const assertClosedCalendar = async calendar => {
+    assert.equal(await calendar.locator('button.calendar-date:enabled').count(), 0);
+    assert.ok(await calendar.locator('button.calendar-date:disabled').count() > 0);
+    assert.equal(await calendar.locator('button.calendar-date[aria-expanded]').count(), 0);
+    assert.equal(await calendar.locator('table').first().evaluate(table => getComputedStyle(table).filter), 'grayscale(1)');
+  };
+  await assertClosedCalendar(page.locator('#availability-calendar'));
+  assert.ok(await page.locator('#availability-calendar .vote-mark.vote-available').count() > 0);
+  await page.locator('#poll-options .response-toggle').first().click();
+  await page.locator('#availability-responses .calendar-votes:not([hidden])').waitFor();
+  await page.goto(details.home);
+  await first.getByText('Second proposal', {exact:false}).waitFor();
+  assert.equal(await first.locator('.agenda-preview-talk').count(), 2);
+  assert.equal(await first.getByRole('link', {name:'View responses for Seminar 1'}).count(), 1);
+  await assertClosedCalendar(first.locator('.event-calendar'));
+  assert.ok(await first.locator('.vote-mark.vote-available').count() > 0);
+  assert.match(await page.locator('#continue-link').textContent(), /Seminar 2/);
+  const previewBox = await first.locator('.agenda-preview').boundingBox();
+  const calendarBox = await first.locator('.event-calendar').boundingBox();
+  assert.ok(previewBox.y + previewBox.height <= calendarBox.y);
+  await page.screenshot({path:'test-results/closed-availability-programme.png', fullPage:true});
+  await page.goto(details.base);
+  await first.locator('.agenda-preview-talk').nth(1).waitFor();
+  await assertClosedCalendar(first.locator('.event-calendar'));
+  assert.doesNotMatch(await first.locator('.agenda-preview').textContent(), /First proposal|Second proposal|example.com/);
+  // Archive November after moving its talks; saved votes and old invitation links survive.
+  let source = await api('invitation', {token, event_id, include_presentations:true});
+  for (const talk of [...source.presentations]) {
+    const moved = await api('admin', {action:'move_presentation', secret, token, event_id,
+      destination_event_id:'seminar-2', participant_id:talk.participant_id, version:source.presentation_order_version});
+    source = moved.source;
+  }
+  const archiveDashboard = await api('admin', {action:'dashboard', secret, event_id});
+  await api('admin', {action:'archive_event', secret, event_id, successor_event_id:'seminar-2', snapshot:archiveDashboard.snapshot});
+  const archived = await api('invitation', {token, event_id});
+  assert.deepEqual(archived.answers, saved.answers);
+  assert.equal(archived.comment, saved.comment);
+  await page.goto(details.home);
+  const december = page.locator('.event-card[data-event="seminar-2"]');
+  await december.locator('.agenda-preview-talk').nth(1).waitFor();
+  assert.equal(await page.locator('.event-card[data-event="seminar-1"]').count(), 0);
+  assert.equal(await page.locator('.event-card').count(), 3);
+  assert.equal(await december.locator('.next-seminar-note').count(), 1);
+  await page.goto(details.invitation);
+  await page.locator('#poll-options input').first().waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('event'), 'seminar-2');
+  await page.goto(details.base + 'agenda.html?event=seminar-1#token=' + token);
+  await page.locator('#agenda-list').getByText('First proposal', {exact:true}).waitFor();
+  assert.equal(await page.locator('#agenda-list [data-event="seminar-1"]').count(), 0);
+  assert.equal(await page.locator('#agenda-list').getByText('Second proposal', {exact:true}).count(), 1);
+  const onsiteInvite = await api('invitation', {token, event_id:'onsite'});
+  const disabledIds = onsiteInvite.poll.slots.slice(3).map(slot => slot.id);
+  assert.ok(disabledIds.length > 0);
+  await api('respond', {token, event_id:'onsite', revision:onsiteInvite.revision, response_version:onsiteInvite.response_version,
+    comment:'Keep the later April choice.', ['answer:' + disabledIds[0]]:'unavailable'});
+  const onsiteDashboard = await api('admin', {action:'dashboard', secret, event_id:'onsite'});
+  await api('admin', {action:'disable_options', secret, event_id:'onsite', slot_ids:disabledIds, snapshot:onsiteDashboard.snapshot});
+  await page.goto(details.base + 'event.html?event=onsite#token=' + token);
+  await page.locator('#poll-options .poll-option.is-disabled').first().waitFor();
+  assert.equal(await page.locator('#poll-options fieldset:not(:disabled)').count(), 3);
+  const disabledCards = page.locator('#poll-options fieldset:disabled');
+  assert.equal(await disabledCards.count(), disabledIds.length);
+  assert.equal(await disabledCards.locator('input:checked').count(), 1);
+  assert.ok(await page.locator('.calendar-option-disabled button.calendar-date:disabled').count() > 0);
+  assert.ok(await page.locator('.calendar-option-disabled .vote-unavailable').count() > 0);
+  await page.locator('#all-available').click();
+  assert.equal(await disabledCards.locator('input[value="available"]:checked').count(), 0);
+  assert.equal(await page.locator('#poll-options input:checked:not(:disabled)').count(), 3);
+  await page.locator('#save-later').click();
+  await page.locator('#status-pill').filter({hasText:'Saved'}).waitFor();
+  const onsiteSaved = await api('invitation', {token, event_id:'onsite'});
+  assert.equal(onsiteSaved.answers[disabledIds[0]], 'unavailable');
+  assert.equal(onsiteSaved.comment, 'Keep the later April choice.');
+  assert.equal(await disabledCards.locator('input:checked').count(), 1);
   assert.deepEqual(errors, []);
   console.log('Programme carousel and vertical Agenda: layout, navigation, drafts, saved responses, deep links, talk editing, mobile and reduced motion passed.');
 } finally {

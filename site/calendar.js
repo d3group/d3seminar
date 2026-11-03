@@ -28,10 +28,11 @@ function voteRing(people, slots) {
   }
   return svg;
 }
-export function renderCalendar(container, event, {confirmed = false, people = null, totals = null, onSelect = null, openDate = null, responseContainer = null, onInspect = () => {}} = {}) {
+export function renderCalendar(container, event, {confirmed = false, closed = false, disabledSlotIds = [], people = null, totals = null, onSelect = null, openDate = null, responseContainer = null, onInspect = () => {}} = {}) {
+  const disabled = new Set(disabledSlotIds);
   const canInspect = Boolean(people || totals);
   const countsFor = slot => totals ? totals[slot.id || slot.slot_id] : voteCounts(people || [], slot, event.required_participants);
-  const counts = new Map(event.slots.map(slot => [slot, countsFor(slot).available]));
+  const counts = new Map(event.slots.filter(slot => !disabled.has(slot.id)).map(slot => [slot, countsFor(slot).available]));
   const highest = Math.max(0, ...counts.values());
   const standing = slots => confirmed ? 'confirmed' : highest > 0 && slots.some(slot => counts.get(slot) === highest) ? 'leading' : 'proposed';
   const standingNames = {proposed:'Proposed', leading:'Leading so far', confirmed:'Confirmed'};
@@ -51,6 +52,7 @@ export function renderCalendar(container, event, {confirmed = false, people = nu
     }
   }
   container.replaceChildren();
+  container.classList.toggle('calendar-closed', closed);
   const panel = element('section', '', 'calendar-votes');
   panel.id = 'votes-' + event.id; panel.hidden = true; panel.tabIndex = -1;
   panel.setAttribute('aria-label', 'Responses for ' + event.name);
@@ -140,6 +142,8 @@ export function renderCalendar(container, event, {confirmed = false, people = nu
           cell.dataset.date = key;
           if (weekend || holiday) cell.classList.add('calendar-day-off');
           const slots = dates.get(key);
+          const unavailable = closed || slots?.every(slot => disabled.has(slot.id));
+          if (slots && unavailable) cell.classList.add('calendar-option-disabled');
           const state = slots ? standing(slots) : null;
           if (event.duration_days > 1 && slots) {
             const previous = slots.some(slot => dateKey(slot.start) < key);
@@ -160,12 +164,12 @@ export function renderCalendar(container, event, {confirmed = false, people = nu
           if (slots) {
             date.classList.add('date-' + state);
             const label = `${standingNames[state]}: ${slots.map(slot => slotLabel(slot, event.timezone, event.daily_hours)).join('; ')}`;
-            date.setAttribute('aria-label', `${day} ${monthLabel}. ${dayNote ? dayNote + '. ' : ''}${label}. ${onSelect ? 'Enter availability for' : canInspect ? 'Show responses for' : 'View'} ${event.name}.`);
-            if (canInspect || onSelect) {
+            date.setAttribute('aria-label', `${day} ${monthLabel}. ${dayNote ? dayNote + '. ' : ''}${label}. ${unavailable ? 'Availability closed for' : onSelect ? 'Enter availability for' : canInspect ? 'Show responses for' : 'View'} ${event.name}.`);
+            if (people) date.append(voteRing(people, slots));
+            if (!unavailable && (canInspect || onSelect)) {
               date.dataset.selection = key;
               date.type = 'button';
               if (!onSelect) { date.setAttribute('aria-expanded', 'false'); date.setAttribute('aria-controls', panel.id); }
-              if (people) date.append(voteRing(people, slots));
               date.addEventListener('click', () => onSelect ? onSelect(key, slots) : showVotes(date, slots));
               dateButtons.set(key, {date, slots});
             } else { date.type = 'button'; date.disabled = true; }
@@ -180,6 +184,7 @@ export function renderCalendar(container, event, {confirmed = false, people = nu
         const visible = optionDays.filter(day => weekDates.has(day.date));
         if (!visible.length) continue;
         const line = element('span', '', `calendar-option option-colour-${index % 3} date-${standing([slot])}`);
+        if (disabled.has(slot.id)) line.classList.add('calendar-option-disabled');
         const label = `Option ${index + 1}. ${standingNames[standing([slot])]}: ${slotLabel(slot, event.timezone, event.daily_hours)}`;
         line.setAttribute('role', 'img'); line.setAttribute('aria-label', label); line.title = label;
         line.style.gridColumn = `${weekDates.get(visible[0].date) + 1} / span ${visible.length}`;

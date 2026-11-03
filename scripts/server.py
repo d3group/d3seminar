@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from database import make_engine, transaction, upgrade
-from models import Invitation, PollState, history
+from models import Invitation, PollState, Presentation, history
 
 import seminar
 import presentations
@@ -90,6 +90,8 @@ class Store:
             changed = identity(invites) != identity(r for r in existing.values() if r['active'])
             if changed and state.get('final_event'):
                 raise ValueError('This seminar is finalized. Archive it and start a new campaign before changing the roster or times.')
+            if changed and state.get('availability_closed'):
+                raise ValueError('Availability is closed. Existing choices and candidate times must be preserved.')
             if changed:
                 if existing:
                     self.archive(session, list(existing.values()), state)
@@ -153,10 +155,13 @@ class Store:
                 counts = {value:sum(r['answers'].get(slot['id']) == value for r in records) for value in ('available', 'unavailable')}
                 counts['unknown'] = max(poll['required_participants'], len(records)) - sum(counts.values())
                 totals[slot['id']] = counts
-            final = self.state(session).get('final_event')
+            state = self.state(session)
+            final = state.get('final_event')
             # Public data is an explicit projection: never include the private programme or roster.
             final = {key:final[key] for key in ('slot_id', 'start', 'end')} if final else None
-            return dict(poll=poll, final_event=final, totals=totals, presentations=presentations.listing(self, session))
+            return dict(poll=poll, final_event=final, availability_closed=bool(state.get('availability_closed')),
+                        totals=totals, presentations=presentations.listing(self, session),
+                        **({'disabled_slot_ids':state['disabled_slot_ids']} if state.get('disabled_slot_ids') else {}))
 
     def respond(self, params):
         partial = params.get('partial', 'false')
@@ -172,15 +177,22 @@ class Store:
             state = self.state(session)
             if state.get('final_event'):
                 raise ValueError('The seminar time is finalized. Please contact Aabhash if your availability has changed.')
+            if state.get('availability_closed'):
+                raise ValueError('Availability is closed. Your saved choices are preserved and can no longer be changed.')
             if partial == 'false' and params.get('response_version') != response_version(record):
                 raise ResponseConflict('This form is out of date. Reload this page to review your saved availability before saving again.')
             ids = {slot['id'] for slot in record['poll']['slots']}
-            answers = dict(record['answers']) if partial == 'true' else {}
+            disabled = set(state.get('disabled_slot_ids', []))
+            answers = dict(record['answers']) if partial == 'true' else {key:value for key,value in record['answers'].items() if key in disabled}
             for key, value in params.items():
                 if key.startswith('answer:'):
                     slot_id = key[7:]
                     if slot_id not in ids or value not in ANSWERS | {''}:
                         raise ValueError('Invalid availability option.')
+                    if slot_id in disabled:
+                        if value != record['answers'].get(slot_id, ''):
+                            raise ValueError('This option is disabled. Reload to see the remaining dates; your saved choices are preserved.')
+                        continue
                     if value:
                         answers[slot_id] = value
                     else:
@@ -189,6 +201,45 @@ class Store:
                 record.update(answers=answers, comment=comment.strip(), updated_at=datetime.now(timezone.utc).isoformat())
                 session.get(Invitation, record['id']).data = record
         return record
+
+    def close_availability(self, snapshot):
+        with self.session(write=True) as session:
+            if self.dashboard(session)['snapshot'] != snapshot:
+                raise ValueError('Responses changed. Refresh the dashboard before closing availability.')
+            state = self.state(session)
+            if not state.get('availability_closed'):
+                state.update(availability_closed=True, availability_closed_at=seminar.now())
+                self.write_state(session, state)
+        return state
+
+    def archive_event(self, snapshot, successor_event_id):
+        with self.session(write=True) as session:
+            if self.dashboard(session)['snapshot'] != snapshot:
+                raise ValueError('Responses changed. Refresh before archiving this event.')
+            if session.scalar(select(Presentation.participant_id).limit(1)):
+                raise ValueError('Move the talk proposals to the next event before archiving.')
+            state = self.state(session)
+            self.archive(session, self.records(session), state)
+            state.update(archived=True, archived_at=seminar.now(), successor_event_id=successor_event_id,
+                         availability_closed=True)
+            self.write_state(session, state)
+        return state
+
+    def disable_options(self, snapshot, slot_ids):
+        with self.session(write=True) as session:
+            dashboard = self.dashboard(session)
+            if dashboard['snapshot'] != snapshot:
+                raise ValueError('Responses changed. Refresh before disabling options.')
+            state = self.state(session)
+            if state.get('final_event') or state.get('availability_closed'):
+                raise ValueError('Availability is already closed for this event.')
+            ids = {slot['id'] for slot in dashboard['poll']['slots']}
+            if (not isinstance(slot_ids, list) or any(not isinstance(key, str) for key in slot_ids)
+                    or len(set(slot_ids)) != len(slot_ids) or not set(slot_ids) < ids):
+                raise ValueError('Choose valid options to disable and keep at least one option open.')
+            state['disabled_slot_ids'] = slot_ids
+            self.write_state(session, state)
+        return state
 
     def responses(self):
         with self.session() as session:
@@ -207,10 +258,10 @@ class Store:
         for slot in poll['slots'] if poll else []:
             counts = {value: sum(r['answers'].get(slot['id']) == value for r in records) for value in ANSWERS}
             counts['unknown'] = max(required, len(records)) - sum(counts.values())
-            ready = len(records) == required and counts['available'] == required
+            ready = slot['id'] not in state.get('disabled_slot_ids', []) and len(records) == required and counts['available'] == required
             slots.append(dict(slot, **counts, ready=ready))
         people = [dict(id=r['id'], name=r['name'], role=r.get('role', ''), email=r['email'], answers=r['answers'], comment=r['comment'], updated_at=r['updated_at'],
-                       complete=len(r['answers']) == len(poll['slots'])) for r in records]
+                       complete=all(r['answers'].get(slot['id']) in ANSWERS for slot in seminar.active_slots(poll, state))) for r in records]
         return dict(poll=poll, state=state, participants=people, slots=slots, registered=len(records), required=required,
                     completed=sum(p['complete'] for p in people), snapshot=seminar.event_revision(dict(records=records, state=state)))
 
@@ -220,6 +271,8 @@ class Store:
             if dashboard['snapshot'] != snapshot:
                 raise ValueError('Responses changed. Refresh the dashboard and check the latest availability.')
             state = self.state(session)
+            if state.get('archived'):
+                raise ValueError('This event is archived.')
             if state.get('final_event'):
                 raise ValueError('This seminar is already finalized.')
             slot = next((s for s in dashboard['slots'] if s['id'] == slot_id), None)
@@ -244,8 +297,9 @@ def page(title, body):
             '</header><main class="receipt-page"><h1>' + html.escape(title) + '</h1>' + body + '</main></body></html>')
 
 
-def receipt(record, token):
-    count, total = len(record['answers']), len(record['poll']['slots'])
+def receipt(record, token, state=None):
+    slots = seminar.active_slots(record['poll'], state or {})
+    count, total = sum(record['answers'].get(slot['id']) in ANSWERS for slot in slots), len(slots)
     message = f'Your availability is saved for {count} of {total} options.'
     message += ' Please return to answer the remaining options.' if count < total else ' The organizer will email the final time once everyone can attend.'
     link = record['site_url'] + 'event.html?' + urlencode(dict(event=record.get('event_id', 'seminar-1'))) + '#' + urlencode(dict(token=token))
@@ -352,7 +406,15 @@ def create_app(service):
 
     @app.get('/config.json')
     def config():
-        return service.config
+        active, archived = [], []
+        for event in service.config['events']:
+            with service.stores[event['id']].session() as session:
+                state = service.stores[event['id']].state(session)
+            if state.get('archived'):
+                archived.append(dict(event, successor_event_id=state.get('successor_event_id')))
+            else:
+                active.append(event)
+        return dict(service.config, events=active, archived_events=archived) if archived else service.config
 
     @app.get('/')
     @app.get('/<path:filename>')
@@ -371,7 +433,9 @@ def create_app(service):
         store = event_store(data)
         record = store.respond(data)
         if 'application/json' not in request.headers.get('Accept', ''):
-            return Response(receipt(record, data['token']), content_type='text/html; charset=utf-8')
+            with store.session() as session:
+                state = store.state(session)
+            return Response(receipt(record, data['token'], state), content_type='text/html; charset=utf-8')
         if data.get('partial') == 'true' or data.get('include_votes') == 'true':
             result = invitation_result(store, data['token'], include_votes=True)
         else:
@@ -451,7 +515,7 @@ def create_app(service):
             except ValueError:
                 return dict(ok=False, error='An active organizer invitation is required.'), 403
             # Email previews contain other people's access links; reserve them for the local sender.
-            if action not in {'dashboard', 'finalize', 'preview_schedule', 'save_schedule', 'save_programme', 'reorder_presentations', 'move_presentation',
+            if action not in {'dashboard', 'finalize', 'close_availability', 'archive_event', 'disable_options', 'preview_schedule', 'save_schedule', 'save_programme', 'reorder_presentations', 'move_presentation',
                               'users', 'save_user', 'email_draft', 'email_example', 'save_email_draft', 'email_preview', 'queue_mail', 'mail_batches', 'cancel_mail'}:
                 return dict(ok=False, error='This action requires the local administration credentials.'), 403
         if action == 'users':
@@ -468,7 +532,7 @@ def create_app(service):
                         dict(subject=data.get('subject'), body=data.get('body'))))
         if action == 'save_email_draft':
             return dict(ok=True, **email_queue.save_draft(organizer, data.get('mail_event', 'next'), data.get('kind'),
-                        dict(subject=data.get('subject'), body=data.get('body')), data.get('version')))
+                        dict(subject=data.get('subject'), body=data.get('body')), data.get('version'), data.get('audience')))
         if action == 'queue_mail':
             batch_id = email_queue.enqueue(organizer, data.get('mail_event', 'next'), data.get('kind'), data.get('version'))
             return dict(ok=True, batch_id=batch_id)
@@ -485,6 +549,18 @@ def create_app(service):
             return dict(ok=True, records=store.responses())
         if action == 'dashboard':
             return dict(ok=True, **store.dashboard())
+        if action == 'disable_options':
+            with organizer.lock():
+                return dict(ok=True, state=store.disable_options(data.get('snapshot'), data.get('slot_ids')))
+        if action == 'archive_event':
+            successor_id = data.get('successor_event_id')
+            successor = event_store(dict(event_id=successor_id))
+            if successor is store:
+                raise ValueError('Choose a different successor event.')
+            with organizer.lock(), successor.session() as session:
+                if successor.state(session).get('archived'):
+                    raise ValueError('Choose an active successor event.')
+                return dict(ok=True, state=store.archive_event(data.get('snapshot'), successor_id))
         if action == 'reorder_presentations':
             store.invitation(data.get('token'))
             with organizer.lock():
@@ -501,6 +577,9 @@ def create_app(service):
         if action == 'finalize':
             with organizer.lock():
                 return dict(ok=True, state=store.select(action, data.get('slot_id'), data.get('snapshot')))
+        if action == 'close_availability':
+            with organizer.lock():
+                return dict(ok=True, state=store.close_availability(data.get('snapshot')))
         if action == 'preview_schedule':
             return dict(ok=True, **organizer.preview_schedule(data['event_id'], data['proposal']))
         if action == 'save_schedule':

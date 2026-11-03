@@ -102,6 +102,9 @@
           <p id="draft-notice" class="notice" role="status" aria-live="polite" hidden></p>
           <div class="mail-draft-layout">
           <form id="mail-draft-form" hidden>
+            <label for="mail-audience">Audience</label>
+            <select id="mail-audience" aria-describedby="mail-audience-help"><option value="all">Everyone</option><option value="professors">Professors only</option></select>
+            <p id="mail-audience-help" class="admin-help">Saved with this draft. The email type still applies: reminders go only to unfinished responses; talk requests go only to eligible PhD participants.</p>
             <label for="draft-subject">Subject</label><input id="draft-subject" type="text" maxlength="250" required>
             <label for="draft-body">Message</label><textarea id="draft-body" rows="17" maxlength="20000" spellcheck="true" required></textarea>
             <p class="hint">Use **text** for bold, for example **{deadline}**.</p>

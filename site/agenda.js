@@ -1,12 +1,12 @@
 import {apiFetch, loadConfig, apiUrl, serviceNotice} from './api.js';
-import {$, element, selectEvent, slotLabel, eventHref, preserveInvitationLinks, loadProgramme, renderProgramme, renderPresentationNudge, agendaSchedule, nextSeminar, eventDisclosure} from './shared.js';
+import {$, element, selectEvent, activeEventId, slotLabel, eventHref, preserveInvitationLinks, loadProgramme, renderProgramme, renderPresentationNudge, agendaSchedule, nextSeminar, eventDisclosure} from './shared.js';
 
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
 preserveInvitationLinks(token);
 let config, entries = [], editingId, editingOwner, saving = false;
 const drafts = new Map();
 const expandedEvents = new Map();
-const requestedEvent = new URLSearchParams(location.search).get('event');
+let requestedEvent = new URLSearchParams(location.search).get('event');
 const canPresent = invitation => ['student', 'professor', 'member'].includes(invitation?.role);
 
 function timingLabel(talk) {
@@ -501,6 +501,12 @@ function setupEditor() {
 
 async function start() {
   config = await loadConfig();
+  const url = new URL(location.href);
+  for (const key of ['event', 'present']) {
+    if (url.searchParams.has(key)) url.searchParams.set(key, activeEventId(config, url.searchParams.get(key)));
+  }
+  history.replaceState(null, '', url);
+  requestedEvent = url.searchParams.get('event');
   document.title = 'Agenda · D3 · ' + config.semester;
   entries = config.events.map(event => ({event}));
   if (config.service_status !== 'ready') {

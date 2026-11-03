@@ -114,6 +114,8 @@ def move(store, destination, participant_id, version):
             raise ValueError('This author already has a talk in that event. Ask them to resolve it before moving this talk.')
         target_state = connection.exec_driver_sql('SELECT data FROM destination.poll_state WHERE id=1').scalar()
         target_state = json.loads(target_state) if target_state else {}
+        if target_state.get('archived'):
+            raise ValueError('Talks cannot be moved into an archived event.')
         target_people = [json.loads(raw) for raw, in connection.exec_driver_sql('SELECT data FROM destination.invitations')]
         target_talks = set(connection.exec_driver_sql('SELECT participant_id FROM destination.presentations').scalars())
         target_state['programme_order'] = [person['id'] for person in ordered_people(target_people, target_state)
@@ -130,6 +132,8 @@ def move(store, destination, participant_id, version):
 
 def editable(store, session, token, version, participant_id=None):
     person = store.lookup(session, token)
+    if store.state(session).get('archived'):
+        raise ValueError('This event is archived. Add or edit your talk in the next seminar.')
     if person.get('role') not in PRESENTER_ROLES:
         raise ValueError('Your invitation does not allow presentation submissions. Please contact Aabhash.')
     owner_id = participant_id or person['id']

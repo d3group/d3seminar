@@ -107,6 +107,8 @@ class Organizer:
             raise ValueError('Register the event before editing its dates.')
         if dashboard['state'].get('final_event'):
             raise ValueError('This event is finalized. Its dates cannot be changed.')
+        if dashboard['state'].get('availability_closed'):
+            raise ValueError('Availability is closed. Its candidate dates and saved choices cannot be changed.')
         poll = copy.deepcopy(dashboard['poll'])
         zone = poll['timezone']
         poll['deadline'] = local_datetime(proposal['deadline'], zone).isoformat()
@@ -216,6 +218,8 @@ class Organizer:
             if entry.get('kind') != 'seminar' or entry['id'] not in self.stores:
                 continue
             dashboard = self.stores[entry['id']].dashboard()
+            if dashboard['state'].get('archived'):
+                continue
             poll = dashboard['poll']
             if not poll:
                 continue
@@ -252,6 +256,8 @@ class Organizer:
         if config['test_mode'] and any(r['email'] != local['test_recipient'] for r in invitations):
             raise ValueError('Test mode allows only your test address. No email was sent.')
         dashboard = self.stores[event_id].dashboard()
+        if dashboard['state'].get('archived'):
+            raise ValueError('This event is archived. Choose an active event for emails.')
         config.update(dashboard['poll'] or {})
         responses = {p['id']:p for p in dashboard['participants']}
         later = []
@@ -270,19 +276,22 @@ class Organizer:
                         if presentations.contribution(session, person['id']).get('title'):
                             planned.add(person['email'])
         saved = draft(self, event_id, kind)
+        audience = saved['audience']
         template = {key:saved[key] for key in ('subject', 'body')}
         messages = []
         for invite in invitations:
+            if audience == 'professors' and responses.get(invite['id'], {}).get('role') != 'professor':
+                continue
             key = seminar.eligible(invite, responses.get(invite['id']), kind, dashboard['state'])
             if not key or kind == 'present' and invite['email'] in planned:
                 continue
             alternatives = [e for e in later if e['id'] in registered.get(invite['email'], set())]
             row = dict(id=invite['id'], key=key, name=invite['name'],
                        **seminar.message_content(config, local, invite, kind, dashboard['state'], alternatives, template))
-            row['preview'] = seminar.event_revision(dict(message=row, sender=local['sender_email'], sender_name=sender_name))
+            row['preview'] = seminar.event_revision(dict(message=row, sender=local['sender_email'], sender_name=sender_name, audience=audience))
             messages.append(row)
         return dict(event_id=event_id, event_name=config.get('name', config['title']), kind=kind, messages=messages,
-                    sender=local['sender_email'], sender_name=sender_name)
+                    audience=audience, sender=local['sender_email'], sender_name=sender_name)
 
     def preview_mail(self, event_id, kind):
         with self.lock():

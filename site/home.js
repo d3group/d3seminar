@@ -1,6 +1,6 @@
 import {renderCalendar} from './calendar.js';
 import {apiFetch, loadConfig, serviceNotice} from './api.js';
-import {$, element, selectEvent, slotLabel, eventHref, durationLabel, deadlineLabel, preserveInvitationLinks, answeredCount, responseComplete, eventFinished, loadProgramme, nextEvent, nextSeminar, eventDisclosure, eventTimeline, programmeProgress, showSavedResponse, renderProgramme, renderPresentationNudge} from './shared.js';
+import {$, element, selectEvent, slotLabel, eventHref, durationLabel, deadlineLabel, preserveInvitationLinks, answeredCount, activeSlots, responseComplete, eventFinished, loadProgramme, nextEvent, nextSeminar, eventDisclosure, eventTimeline, programmeProgress, showSavedResponse, renderProgramme, renderPresentationNudge} from './shared.js';
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
 const requestedEvent = new URLSearchParams(location.search).get('event');
 preserveInvitationLinks(token);
@@ -18,12 +18,13 @@ function renderAgendaPreview(container, event, talks = null, invited = false) {
   link.setAttribute('aria-label', 'View agenda for ' + event.name);
   header.append(heading, link); container.append(header);
   if (count) {
-    const first = talks[0];
-    const preview = element('p', '', 'agenda-preview-talk');
-    const names = first.presenters?.map(person => person.name) || first.name.split(' & ');
-    preview.append(element('strong', names.map(name => name.trim().split(/\s+/)[0]).join(' & ')));
-    if (invited) preview.append(element('span', ' · ' + first.title));
-    container.append(preview);
+    for (const talk of talks) {
+      const preview = element('p', '', 'agenda-preview-talk');
+      const names = talk.presenters?.map(person => person.name) || talk.name.split(' & ');
+      preview.append(element('strong', names.map(name => name.trim().split(/\s+/)[0]).join(' & ')));
+      if (invited) preview.append(element('span', ' · ' + talk.title));
+      container.append(preview);
+    }
   } else if (talks !== null) container.append(element('p', `No ${invited ? '' : 'public '}talks yet`, 'agenda-preview-empty'));
 }
 
@@ -55,17 +56,21 @@ function card(event, invited) {
   const link = element('a', token ? 'Share availability' : 'View event', 'event-link');
   link.href = eventHref(event.id, token); link.setAttribute('aria-label', `${token ? 'Share availability for' : 'View'} ${event.name}`);
   bottom.append(status, link);
-  const content = element('div', '', 'event-content'); content.append(metadata, summary, programme, calendar, agenda, bottom);
+  const content = element('div', '', 'event-content'); content.append(metadata, summary, agenda, programme, calendar, bottom);
   const disclosure = eventDisclosure(heading, content, false, open => expandedEvents.set(event.id, open));
   node.append(disclosure);
   $('event-grid').append(node);
   return {node, disclosure, status, link, metadata, calendar, summary, programme, agenda, deadline};
 }
 
-function renderDeadline(entry, poll, finalized, completed = false) {
+function renderDeadline(entry, poll, finalized, completed = false, closed = false) {
   entry.deadline.hidden = Boolean(finalized);
   entry.deadline.classList.toggle('preferences-saved', completed);
   if (finalized) return;
+  if (closed) {
+    entry.deadline.textContent = 'Availability is closed. Saved choices are preserved.';
+    return;
+  }
   if (completed) {
     entry.deadline.textContent = 'Thank you for setting your preferences.';
     return;
@@ -101,7 +106,7 @@ function renderCard(entry, invitation) {
     entry.node.querySelector('.event-card-bottom').append(manage);
   }
   const finalEvent = invitation.state.final_event;
-  renderDeadline(entry, invitation.poll, finalEvent, responseComplete(invitation));
+  renderDeadline(entry, invitation.poll, finalEvent, responseComplete(invitation), invitation.state.availability_closed);
   if (invitation.state.final_event) {
     entry.summary.replaceChildren(element('p', slotLabel(finalEvent, invitation.poll.timezone, invitation.poll.daily_hours)));
     entry.summary.hidden = false;
@@ -109,15 +114,17 @@ function renderCard(entry, invitation) {
     if (!entry.metadata.querySelector('.event-phase')) entry.metadata.append(element('span', 'Confirmed', 'event-phase'));
     entry.metadata.hidden = false;
     renderProgramme(entry.programme, invitation.state.programme);
+  } else if (invitation.state.availability_closed) {
+    entry.status.textContent = 'Availability closed'; entry.link.textContent = 'View responses';
   } else {
     entry.status.textContent = invitation.updated_at
-      ? `Your response saved${responseComplete(invitation) ? '' : ` · ${answeredCount(invitation)}/${invitation.poll.slots.length} options`}`
+      ? `Your response saved${responseComplete(invitation) ? '' : ` · ${answeredCount(invitation)}/${activeSlots(invitation).length} options`}`
       : 'Awaiting your response';
     entry.link.textContent = invitation.updated_at ? (responseComplete(invitation) ? 'Update availability' : 'Finish your response') : 'Share availability';
   }
   entry.link.setAttribute('aria-label', `${entry.link.textContent} for ${entry.event.name}`);
   renderCalendar(entry.calendar, {...entry.event, ...invitation.poll, slots:finalEvent ? [finalEvent] : invitation.poll.slots}, {
-    confirmed:Boolean(finalEvent), people:invitation.participants,
+    confirmed:Boolean(finalEvent), closed:Boolean(invitation.state.availability_closed), disabledSlotIds:invitation.state.disabled_slot_ids, people:invitation.participants,
     onSelect:date => {
       const destination = new URL(eventHref(entry.event.id, token), location.href);
       destination.searchParams.set('date', date);
@@ -159,7 +166,7 @@ function renderProgress(programme) {
   $('progress-steps').replaceChildren();
   $('continue-link').hidden = !next;
   $('progress-title').textContent = next ? 'Confirm your availability'
-    : valid.length === programme.length ? 'Your availability is confirmed' : 'Some invitations could not load';
+    : valid.length === programme.length ? 'No availability responses outstanding' : 'Some invitations could not load';
   programme.forEach((entry, index) => {
     const confirmed = entry.invitation && eventFinished(entry.invitation);
     const partial = entry.invitation && answeredCount(entry.invitation) > 0;
@@ -170,7 +177,7 @@ function renderProgress(programme) {
     if (entry === next) step.setAttribute('aria-current', 'step');
     const number = element('span', confirmed ? '✓' : String(index + 1).padStart(2, '0'), 'progress-step-number');
     number.setAttribute('aria-hidden', 'true');
-    const status = confirmed ? 'Confirmed' : !entry.invitation ? 'Unavailable' : partial ? 'Finish response' : entry === next ? 'Up next' : 'To confirm';
+    const status = entry.invitation?.state.availability_closed ? 'Closed' : confirmed ? 'Confirmed' : !entry.invitation ? 'Unavailable' : partial ? 'Finish response' : entry === next ? 'Up next' : 'To confirm';
     step.append(number, element('span', entry.event.name, 'progress-step-name'), element('span', status, 'progress-step-status'));
     item.append(step); $('progress-steps').append(item);
   });
@@ -201,8 +208,8 @@ async function start() {
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || 'Public responses could not be loaded.');
         entry.event = {...entry.event, ...data.poll, slots:data.final_event ? [data.final_event] : data.poll.slots};
-        renderDeadline(entry, data.poll, data.final_event);
-        renderCalendar(entry.calendar, entry.event, {confirmed:Boolean(data.final_event), totals:data.totals});
+        renderDeadline(entry, data.poll, data.final_event, false, data.availability_closed);
+        renderCalendar(entry.calendar, entry.event, {confirmed:Boolean(data.final_event), closed:Boolean(data.availability_closed), disabledSlotIds:data.disabled_slot_ids, totals:data.totals});
         renderAgendaPreview(entry.agenda, entry.event, data.presentations);
       } catch {
         entry.calendar.append(element('p', 'Availability totals could not be loaded. Please refresh to try again.', 'notice error'));

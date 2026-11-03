@@ -10,26 +10,33 @@ import seminar
 import mail_templates
 
 
+AUDIENCES = {'all', 'professors'}
+
+
 def draft(organizer, event_id, kind):
     event_id = organizer.mail_event_id(event_id, kind)
     config = seminar.event_config(organizer.config, event_id)
     default = mail_templates.default_template(kind, config)
     with organizer.stores['seminar-1'].session() as session:
         saved = session.get(MailDraft, event_id + ':' + kind)
-        data = saved.data if saved else dict(default, updated_at=None)
+        data = dict(saved.data) if saved else dict(default, updated_at=None)
+        data.setdefault('audience', 'all')
     version = seminar.event_revision(dict(event_id=event_id, kind=kind, **data))
     return dict(event_id=event_id, event_name=config.get('name', config['title']), kind=kind, **data, version=version,
                 default=default, fields=mail_templates.FIELDS, subject_fields=sorted(mail_templates.SUBJECT_FIELDS),
                 required_fields=sorted(mail_templates.required_fields(kind)))
 
 
-def save_draft(organizer, event_id, kind, content, version):
+def save_draft(organizer, event_id, kind, content, version, audience=None):
     mail_templates.validate(content, kind)
     with organizer.lock():
         current = draft(organizer, event_id, kind)
         if current['version'] != version:
             raise ValueError('This draft changed in another window. Reload it before saving.')
-        data = dict(content, updated_at=seminar.now())
+        audience = current['audience'] if audience is None else audience
+        if not isinstance(audience, str) or audience not in AUDIENCES:
+            raise ValueError('Choose Everyone or Professors only as the email audience.')
+        data = dict(content, audience=audience, updated_at=seminar.now())
         with organizer.stores['seminar-1'].session(write=True) as session:
             session.merge(MailDraft(id=current['event_id'] + ':' + kind, data=data))
         return draft(organizer, current['event_id'], kind)
@@ -62,9 +69,9 @@ def review(plan):
     messages = [dict(id=row['id'], name=row['name'], to=row['to'], subject=row['subject'],
                      body=re.sub(r'(?<=token=)[A-Za-z0-9_-]{43}', '[personal-link]', row['body']),
                      attachments=[part['name'] for part in row['attachments']]) for row in plan['messages']]
-    version = seminar.event_revision(dict(event_id=plan['event_id'], kind=plan['kind'], messages=[m['preview'] for m in plan['messages']]))
+    version = seminar.event_revision(dict(event_id=plan['event_id'], kind=plan['kind'], audience=plan['audience'], messages=[m['preview'] for m in plan['messages']]))
     return dict(event_id=plan['event_id'], event_name=plan['event_name'], kind=plan['kind'], sender=plan['sender'],
-                messages=messages, version=version)
+                audience=plan['audience'], messages=messages, version=version)
 
 
 def preview(organizer, event_id, kind, draft_version=None):
@@ -95,7 +102,7 @@ def status(organizer, batch):
         state = delivery.get('status') or ('cancelled' if batch.get('cancelled') else 'review' if error else
             'skipped' if not candidate else 'ready' if candidate['preview']==row['preview'] else 'review')
         people.append(dict(id=row['id'], name=row['name'], to=row['to'], status=state))
-    return dict(id=batch['id'], event_name=batch['event_name'], kind=batch['kind'], created_at=batch['created_at'],
+    return dict(id=batch['id'], event_name=batch['event_name'], kind=batch['kind'], audience=batch.get('audience', 'all'), created_at=batch['created_at'],
                 cancelled=batch.get('cancelled', False), recipients=people, counts=dict(Counter(p['status'] for p in people)), error=error), plan
 
 
@@ -119,7 +126,7 @@ def enqueue(organizer, event_id, kind, version):
             if status(organizer, batch)[0]['counts'].get('ready'):
                 raise ValueError('Cancel the existing batch for this email type before queuing a new one.')
         batch_id = secrets.token_hex(12)
-        data = dict(id=batch_id, event_id=plan['event_id'], event_name=plan['event_name'], kind=kind,
+        data = dict(id=batch_id, event_id=plan['event_id'], event_name=plan['event_name'], kind=kind, audience=plan['audience'],
                     created_at=seminar.now(), version=version, cancelled=False,
                     recipients=[{key:row[key] for key in ('id', 'name', 'to', 'key', 'preview')} for row in plan['messages']])
         with organizer.stores['seminar-1'].session(write=True) as session:
