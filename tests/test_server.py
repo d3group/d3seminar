@@ -33,6 +33,37 @@ class StoreTests(unittest.TestCase):
         self.store = Store(Path(self.temp.name) / 'responses.sqlite3')
         self.store.sync([INVITE])
 
+    def test_closed_availability_preserves_choices_and_blocks_every_response_mode(self):
+        self.store.respond(dict(RESPONSE, comment='Keep this note.'))
+        before = self.store.invitation(TOKEN)
+        self.store.close_availability(self.store.dashboard()['snapshot'])
+        for partial in ('true', 'false'):
+            for answer in ('available', 'unavailable', ''):
+                with self.subTest(partial=partial, answer=answer), self.assertRaisesRegex(ValueError, 'closed'):
+                    self.store.respond(dict(RESPONSE, partial=partial, comment='Replace the note',
+                                            response_version=before['response_version'], **{'answer:' + SLOT:answer}))
+        self.store = Store(self.store.database)
+        after = self.store.invitation(TOKEN)
+        for key in ('answers', 'comment', 'updated_at', 'revision', 'response_version'):
+            self.assertEqual(before[key], after[key])
+        self.assertTrue(after['state']['availability_closed'])
+        self.assertTrue(self.store.public_event(POLL)['availability_closed'])
+        self.assertFalse(after['state'].get('final_event'))
+        for kind in ('initial', 'invite', 'remind'):
+            self.assertFalse(seminar.eligible(dict(INVITE, role='student'), before, kind, after['state']))
+        self.assertTrue(seminar.eligible(dict(INVITE, role='student'), before, 'present', after['state']))
+        self.store.sync([INVITE])
+        self.assertTrue(self.store.invitation(TOKEN)['state']['availability_closed'])
+        with self.assertRaisesRegex(ValueError, 'closed'):
+            self.store.sync([dict(INVITE, email='changed@example.com')])
+
+    def test_closing_availability_requires_current_snapshot(self):
+        snapshot = self.store.dashboard()['snapshot']
+        self.store.respond(RESPONSE)
+        with self.assertRaisesRegex(ValueError, 'Responses changed'):
+            self.store.close_availability(snapshot)
+        self.assertFalse(self.store.invitation(TOKEN)['state'].get('availability_closed'))
+
     def test_response_persists_across_store_restart_and_updates_one_row(self):
         saved = self.store.respond(RESPONSE)
         self.store = Store(self.store.database)
@@ -159,7 +190,7 @@ class StoreTests(unittest.TestCase):
         presentations.save(self.store, TOKEN, dict(talk, visibility='public'))
         presentations.save(self.store, 'B'*43, dict(talk, visibility='internal'))
         public = self.store.public_event(POLL)
-        self.assertEqual(set(public), {'poll', 'final_event', 'totals', 'presentations'})
+        self.assertEqual(set(public), {'poll', 'final_event', 'availability_closed', 'totals', 'presentations'})
         self.assertEqual(public['totals'][SLOT], dict(available=1, unavailable=1, unknown=1))
         self.assertEqual(public['totals'][poll['slots'][1]['id']], dict(available=0, unavailable=0, unknown=3))
         self.assertEqual(public['presentations'], [dict(name='Ada')])
@@ -566,7 +597,7 @@ class HTTPTests(unittest.TestCase):
             status, body = self.request('POST', '/api/public-event', json.dumps(dict(token=token, include_votes=True, include_presentations=True, action='finalize')), headers)
             self.assertEqual(status, 200)
             public = json.loads(body)
-            self.assertEqual(set(public), {'ok', 'poll', 'final_event', 'totals', 'presentations'})
+            self.assertEqual(set(public), {'ok', 'poll', 'final_event', 'availability_closed', 'totals', 'presentations'})
             self.assertNotIn('Ada', body)
             self.assertEqual(set(public['totals'][SLOT]), {'available', 'unavailable', 'unknown'})
         for token in ('', 'X'*43):
