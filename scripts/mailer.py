@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Preview and send seminar emails locally; the university password stays on this machine."""
 
-import argparse, fcntl, getpass, os, smtplib, ssl
+import argparse, fcntl, getpass, html, os, re, smtplib, ssl
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
 from pathlib import Path
@@ -18,6 +18,9 @@ def api(settings, action, **data):
 
 
 def message(plan, row):
+    requests = [part for part in row['attachments'] if part.get('method') == 'REQUEST']
+    if len(requests) > 1:
+        raise ValueError('Each meeting request must be sent in its own email. Use messages().')
     mail = EmailMessage()
     mail['From'] = formataddr((plan['sender_name'], plan['sender']))
     mail['To'] = row['to']
@@ -26,12 +29,32 @@ def message(plan, row):
     mail['Message-ID'] = make_msgid(domain=plan['sender'].split('@')[1])
     mail.set_content(row['body'])
     mail.add_alternative(row['html'], subtype='html')
+    if requests:
+        mail.add_alternative(requests[0]['content'].encode(), maintype='text', subtype='calendar',
+                             params={'charset':'utf-8', 'method':'REQUEST'}, disposition='inline')
     for part in row['attachments']:
+        if part.get('method') == 'REQUEST':
+            continue
         params = {'charset':'utf-8'}
         if part.get('method'):
             params['method'] = part['method']
         mail.add_attachment(part['content'].encode(), maintype='text', subtype='calendar', filename=part['name'], params=params)
     return mail
+
+
+def messages(plan, row):
+    """Send the announcement once and each meeting as an inline Outlook request."""
+    requests = [part for part in row['attachments'] if part.get('method') == 'REQUEST']
+    mails = [message(plan, dict(row, attachments=[part for part in row['attachments'] if part not in requests]))]
+    for part in requests:
+        unfolded = re.sub(r'\r?\n[ \t]', '', part['content'])
+        summary = re.search(r'^SUMMARY:(.*)$', unfolded, re.MULTILINE)
+        title = summary[1].strip() if summary else 'D3 seminar'
+        title = re.sub(r'\\([nN,;\\])', lambda match: ' ' if match[1] in 'nN' else match[1], title)
+        body = f'Calendar invitation for {title}.\n\nThe seminar date is confirmed. This invitation is for your calendar.'
+        mails.append(message(plan, dict(row, subject=title + ' · Calendar invitation', body=body,
+                                       html='<p>' + html.escape(body).replace('\n\n', '</p><p>') + '</p>', attachments=[part])))
+    return mails
 
 
 def run(settings, directory, kind, send=False, event='next'):
@@ -41,11 +64,13 @@ def run(settings, directory, kind, send=False, event='next'):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     outbox = directory / 'outbox'
     outbox.mkdir(exist_ok=True, mode=0o700)
-    rows = [(plan, row, message(plan, row)) for plan in plans for row in plan['messages']]
-    print(f'{len(rows)} {kind} email(s) from {settings["sender_email"]}')
-    for plan, row, mail in rows:
-        path = outbox / f'{plan["event_id"]}-{row["id"]}-{plan["kind"]}.eml'
-        path.write_bytes(bytes(mail)); path.chmod(0o600)
+    rows = [(plan, row, messages(plan, row)) for plan in plans for row in plan['messages']]
+    print(f'{len(rows)} recipient(s), {sum(len(mails) for _, _, mails in rows)} email(s) from {settings["sender_email"]}')
+    for plan, row, mails in rows:
+        for index, mail in enumerate(mails):
+            suffix = f'-calendar-{index}' if index else ''
+            path = outbox / f'{plan["event_id"]}-{row["id"]}-{plan["kind"]}{suffix}.eml'
+            path.write_bytes(bytes(mail)); path.chmod(0o600)
         print(f'  {row["name"]} <{row["to"]}> — {row["subject"]}')
     print(f'Private message previews: {outbox}')
     if not rows or not send:
@@ -60,16 +85,24 @@ def run(settings, directory, kind, send=False, event='next'):
         with smtplib.SMTP_SSL(settings['smtp_host'], settings['smtp_port'], context=ssl.create_default_context(), timeout=30) as smtp:
             smtp.login(settings['smtp_username'], password)
             sent, skipped = 0, 0
-            for plan, row, mail in rows:
+            for plan, row, mails in rows:
+                message_id = mails[0]['Message-ID']
                 claim = api(settings, 'claim_mail', event_id=plan['event_id'], kind=plan['kind'], participant_id=row['id'],
-                            preview=row['preview'], message_id=mail['Message-ID'], **({'batch_id':plan['batch_id']} if 'batch_id' in plan else {}))
+                            preview=row['preview'], message_id=message_id, **({'batch_id':plan['batch_id']} if 'batch_id' in plan else {}))
                 if not claim['claimed']:
                     skipped += 1
                     continue
-                smtp.send_message(mail, from_addr=plan['sender'], to_addrs=[row['to']])
-                api(settings, 'finish_mail', event_id=plan['event_id'], participant_id=row['id'], key=row['key'], message_id=mail['Message-ID'])
+                receipt_path = outbox / f'{plan["event_id"]}-{row["id"]}-{plan["kind"]}-delivery.json'
+                receipts = [dict(message_id=mail['Message-ID'], subject=str(mail['Subject']), status='pending') for mail in mails]
+                for mail, receipt in zip(mails, receipts, strict=True):
+                    receipt['status'] = 'attempted'
+                    seminar.save_private(receipt_path, receipts)
+                    smtp.send_message(mail, from_addr=plan['sender'], to_addrs=[row['to']])
+                    receipt['status'] = 'accepted'
+                    seminar.save_private(receipt_path, receipts)
+                api(settings, 'finish_mail', event_id=plan['event_id'], participant_id=row['id'], key=row['key'], message_id=message_id)
                 sent += 1
-            print(f'{sent} accepted by university SMTP; {skipped} skipped because eligibility changed.')
+            print(f'All messages accepted for {sent} recipient(s); {skipped} skipped because eligibility changed.')
     finally:
         password = None
 

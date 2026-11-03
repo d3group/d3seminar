@@ -27,7 +27,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .masthead:has(.programme-tabs) { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
 .masthead > a { display: block; min-width: 0; max-width: 100%; line-height: 0; }
 .masthead .brand { justify-self: end; }
-.university-logo { display: block; width: 140px; max-width: 100%; height: auto; }
+.university-logo { display: block; width: 200px; max-width: 100%; height: auto; }
 .d3-logo { display: block; width: 200px; max-width: 100%; height: auto; }
 .programme-tabs { display: flex; align-items: center; justify-content: center; gap: 28px; }
 .programme-tabs a { display: flex; align-items: center; min-height: 44px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 14px; text-decoration: none; }

@@ -213,7 +213,7 @@ function updateEmailExample(delay = 300) {
       document.querySelectorAll('a').forEach(link => link.removeAttribute('href'));
       $('draft-example-body').replaceChildren(...document.body.childNodes);
       $('draft-example-attachments').hidden = !example.attachments.length;
-      $('draft-example-attachments').textContent = 'Attachment: ' + example.attachments.join(', ');
+      $('draft-example-attachments').textContent = `${example.attachments.length} separate calendar invitation${example.attachments.length === 1 ? '' : 's'} will follow this email.`;
       $('draft-example-message').hidden = false;
       $('draft-example-status').textContent = example.provisional
         ? 'Example uses the first candidate date. The event is not yet confirmed.'
@@ -323,7 +323,9 @@ $('mail-preview-form').addEventListener('submit', async event => {
     const preview = await api('email_preview', {kind, mail_event:mailEvent, draft_version:version});
     if (entry !== mailDraft || version !== mailDraft.saved.version || draftChanged()) return;
     mailPreview = preview;
-    $('mail-count').textContent = `${preview.event_name} · ${mailAudiences[preview.audience]}: ${preview.messages.length} email${preview.messages.length === 1 ? '' : 's'} from ${preview.sender}`;
+    const emailCount = preview.messages.reduce((total, mail) => total + 1 + mail.attachments.length, 0);
+    const calendarsNote = emailCount > preview.messages.length ? ' including separate calendar invitations' : '';
+    $('mail-count').textContent = `${preview.event_name} · ${mailAudiences[preview.audience]}: ${preview.messages.length} recipients · ${emailCount} emails${calendarsNote} · from ${preview.sender}`;
     $('mail-messages').replaceChildren();
     preview.messages.forEach((mail, index) => {
       const details = element('details', '', 'mail-message'); details.open = index === 0;

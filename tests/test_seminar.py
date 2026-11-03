@@ -134,6 +134,22 @@ class SeminarTests(unittest.TestCase):
         self.assertNotIn('**', mail['body'])
         self.assertIn('>Open your personal invitation</a>', mail['html'])
 
+    def test_calendar_buffer_extends_only_the_calendar_once_and_preserves_uid(self):
+        event = seminar.event_data(CONFIG, CONFIG['slots'][0])
+        buffered = dict(event, calendar_buffer_minutes=15, calendar_sequence=1, calendar_updated_at='2026-11-03T16:00:00+00:00')
+        original = seminar.calendar_bytes(event).decode()
+        download = seminar.calendar_bytes(buffered).decode()
+        mail = seminar.message_content(CONFIG, seminar.settings(), self.invites()[0], 'confirm', {'final_event':buffered})
+        request = mail['attachments'][0]
+        self.assertEqual(request['calendar_buffer_minutes'], 15)
+        for content in (download, request['content']):
+            self.assertIn('DTEND:20261009T141500Z', content)
+            self.assertIn('UID:' + event['campaign_id'] + '@d3seminar', content)
+        self.assertIn('DTEND:20261009T140000Z', original)
+        self.assertIn('SEQUENCE:1', request['content'])
+        self.assertIn('DTSTAMP:20261103T160000Z', request['content'])
+        self.assertEqual(buffered['end'], event['end'])
+
     def test_timing_emails_use_the_saved_deadline_in_event_local_time(self):
         invite = self.invites()[0]
         for instant, expected in [('2026-10-16T15:00:00+00:00', 'Friday, 16 October 2026 at 17:00'),

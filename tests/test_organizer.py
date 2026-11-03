@@ -186,6 +186,12 @@ class OrganizerTests(unittest.TestCase):
         calendar = seminar.calendar_bytes(event)
         self.assertIn(b'LOCATION:Room 2', calendar)
         self.assertIn(b'Research progress', calendar)
+        self.organizer.save_programme('seminar-1', dict(programme, room=''), self.store.dashboard()['snapshot'])
+        cleared = self.store.invitation(self.token)
+        self.assertEqual(cleared['state']['final_event']['location'], '')
+        self.assertNotIn(b'LOCATION:', seminar.calendar_bytes(cleared['state']['final_event']))
+        self.assertEqual(cleared['answers'], before['answers'])
+        self.assertEqual(cleared['revision'], before['revision'])
 
     def test_local_times_reject_nonexistent_or_ambiguous_clock_times(self):
         for value in ('2027-03-28T02:30', '2026-10-25T02:30'):

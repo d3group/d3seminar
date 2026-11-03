@@ -109,7 +109,7 @@ try {
   await page.locator('#draft-notice').filter({hasText:'Default wording'}).waitFor();
   assert.match(await page.getByLabel('Message', {exact:true}).inputValue(), /\{schedule\}/);
   await page.locator('#draft-example-status').filter({hasText:'first candidate date'}).waitFor();
-  assert.match(await page.locator('#draft-example-attachments').textContent(), /d3-seminar\.ics/);
+  assert.match(await page.locator('#draft-example-attachments').textContent(), /1 separate calendar invitation will follow this email/);
   await page.locator('#mail-kind').selectOption('initial');
   await page.locator('#draft-notice').filter({hasText:'Unsaved changes'}).waitFor();
   assert.equal(await page.getByLabel('Subject', {exact:true}).inputValue(), 'Planning with {first_name}');
@@ -132,7 +132,7 @@ try {
   await page.locator('#mail-draft-form').waitFor();
   assert.equal(await page.getByLabel('Audience', {exact:true}).inputValue(), 'professors');
   await page.getByRole('button', {name:'Preview recipients and emails', exact:true}).click();
-  await page.locator('#mail-count').filter({hasText:'Professors only: 0 emails'}).waitFor();
+  await page.locator('#mail-count').filter({hasText:'Professors only: 0 recipients · 0 emails'}).waitFor();
   assert.equal(await page.locator('#queue-mail').isDisabled(), true);
   await page.getByLabel('Audience', {exact:true}).selectOption('all');
   assert.equal(await page.locator('#mail-review').isVisible(), false);

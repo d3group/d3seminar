@@ -76,7 +76,7 @@ def programme_state(state):
         return state
     programme = state['programme']
     event = dict(state['final_event'], programme=programme)
-    if programme.get('room'):
+    if 'room' in programme:
         event['location'] = programme['room']
     return dict(state, final_event=event)
 
@@ -194,6 +194,12 @@ def when(slot, timezone_name, daily_hours=None):
 
 def calendar_sessions(event):
     sessions = [(event['campaign_id'], datetime.fromisoformat(event['start']), datetime.fromisoformat(event['end']), event['title'])]
+    buffer = event.get('calendar_buffer_minutes', 0)
+    if not isinstance(buffer, int) or isinstance(buffer, bool) or not 0 <= buffer <= 60:
+        raise ValueError('Calendar buffer must be between 0 and 60 minutes.')
+    if buffer and not event.get('daily_hours'):
+        uid, start, end, title = sessions[0]
+        sessions[0] = (uid, start, end + timedelta(minutes=buffer), title)
     if event.get('daily_hours'):
         zone = ZoneInfo(event['timezone'])
         first_day = datetime.fromisoformat(event['start']).astimezone(zone).date()
@@ -219,14 +225,16 @@ def calendar_bytes(event, created_at=None, organizer=None, attendee=None):
             raise ValueError('Send each separate meeting as its own calendar invitation.')
         lines.append('METHOD:REQUEST')
     for uid, start, end, title in sessions:
-        created = datetime.fromisoformat(created_at) if created_at else datetime.now(timezone.utc)
+        updated = event.get('calendar_updated_at') or created_at
+        created = datetime.fromisoformat(updated) if updated else datetime.now(timezone.utc)
         lines.extend(['BEGIN:VEVENT', f'UID:{uid}@d3seminar', f'DTSTAMP:{stamp(created)}',
-                      f'DTSTART:{stamp(start)}', f'DTEND:{stamp(end)}', f'SUMMARY:{escape(title)}',
-                      f'LOCATION:{escape(event["location"])}'])
+                      f'DTSTART:{stamp(start)}', f'DTEND:{stamp(end)}', f'SUMMARY:{escape(title)}'])
+        if event.get('location'):
+            lines.append(f'LOCATION:{escape(event["location"])}')
         if organizer and attendee:
             lines.extend([f'ORGANIZER:mailto:{email_address(organizer)}',
                           f'ATTENDEE;RSVP=TRUE;PARTSTAT=NEEDS-ACTION:mailto:{email_address(attendee)}',
-                          'SEQUENCE:0', 'TRANSP:OPAQUE'])
+                          f'SEQUENCE:{event.get("calendar_sequence", 0)}', 'TRANSP:OPAQUE'])
         programme = event.get('programme', {})
         description = '\n'.join(programme[key] for key in ('topic', 'presenters', 'agenda') if programme.get(key))
         if description:
@@ -493,9 +501,9 @@ def message_content(config, local, invite, kind, state=None, later=None, draft=N
         for meeting in scheduled:
             event = meeting['event']
             for uid, start, end, title in calendar_sessions(event):
-                single = {key:value for key,value in event.items() if key not in {'daily_hours', 'duration_days'}}
+                single = {key:value for key,value in event.items() if key not in {'daily_hours', 'duration_days', 'calendar_buffer_minutes'}}
                 single.update(campaign_id=uid, start=start.isoformat(), end=end.isoformat(), title=title)
-                attachments.append(dict(name='d3-seminar.ics', method='REQUEST',
+                attachments.append(dict(name='d3-seminar.ics', method='REQUEST', calendar_buffer_minutes=event.get('calendar_buffer_minutes', 0),
                     content=calendar_bytes(single, meeting.get('finalized_at'), local['sender_email'], invite['email']).decode()))
         if len(attachments) > 1:
             for index, attachment in enumerate(attachments, 1):

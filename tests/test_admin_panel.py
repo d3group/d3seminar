@@ -91,9 +91,15 @@ class AdminPanelTests(unittest.TestCase):
             self.assertEqual(len(row['attachments']), 2)
             self.assertNotIn('Please set your preferences', row['body'])
             expected_events = [self.service.stores[event_id].dashboard()['state']['final_event'] for event_id in ('seminar-2', 'seminar-3')]
-            wire = mailer.message(plan, row).as_bytes()
-            mail = BytesParser(policy=policy.default).parsebytes(wire)
-            for part, event in zip(mail.iter_attachments(), expected_events, strict=True):
+            outgoing = mailer.messages(plan, row)
+            self.assertEqual(len(outgoing), 3)
+            self.assertFalse(any(part.get_content_type() == 'text/calendar' for part in outgoing[0].walk()))
+            for request, event in zip(outgoing[1:], expected_events, strict=True):
+                mail = BytesParser(policy=policy.default).parsebytes(request.as_bytes())
+                self.assertEqual(mail.get_content_type(), 'multipart/alternative')
+                part = next(part for part in mail.walk() if part.get_content_type() == 'text/calendar')
+                self.assertEqual(part.get_content_disposition(), 'inline')
+                self.assertIsNone(part.get_filename())
                 self.assertEqual(part.get_content_type(), 'text/calendar')
                 self.assertEqual(part.get_param('method'), 'REQUEST')
                 calendar = part.get_payload(decode=True).decode().replace('\r\n ', '')

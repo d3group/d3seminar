@@ -198,10 +198,50 @@ class MailerTests(unittest.TestCase):
         self.assertEqual(str(mail['Subject']), row['subject'])
         self.assertEqual(mail.get_body(preferencelist=('plain',)).get_content().rstrip(), row['body'].rstrip())
         self.assertEqual(mail.get_body(preferencelist=('html',)).get_content().rstrip(), row['html'].rstrip())
-        part = next(mail.iter_attachments())
+        self.assertEqual(mail.get_content_type(), 'multipart/alternative')
+        part = next(part for part in mail.walk() if part.get_content_type() == 'text/calendar')
+        self.assertEqual(part.get_content_disposition(), 'inline')
+        self.assertIsNone(part.get_filename())
         self.assertEqual(part.get_payload(decode=True), row['attachments'][0]['content'].encode())
         self.assertEqual(part.get_content_type(), 'text/calendar')
         self.assertIsNotNone(mail['Message-ID'])
+
+    def test_calendar_requests_send_separately_and_partial_failure_is_not_retried(self):
+        for event_id in ('seminar-1', 'seminar-2'):
+            store = self.server.d3_app.stores[event_id]
+            with store.session(write=True) as session:
+                poll = store.dashboard(session)['poll']
+                store.write_state(session, dict(final_event=seminar.event_data(poll, poll['slots'][0]), finalized_at='2026-10-01T12:34:56+00:00'))
+        plan = self.preview('confirm')
+        row = plan['messages'][0]
+        with self.assertRaisesRegex(ValueError, 'own email'):
+            mailer.message(plan, row)
+        bundle = mailer.messages(plan, row)
+        self.assertEqual(len(bundle), 3)
+        self.assertEqual(len({mail['Message-ID'] for mail in bundle}), 3)
+        self.assertEqual(bundle[0].get_body(preferencelist=('plain',)).get_content().rstrip(), row['body'].rstrip())
+        for request, part in zip(bundle[1:], row['attachments'], strict=True):
+            self.assertEqual(request.get_content_type(), 'multipart/alternative')
+            self.assertEqual([p.get_content_type() for p in request.iter_parts()], ['text/plain', 'text/html', 'text/calendar'])
+            calendar = list(request.iter_parts())[-1]
+            self.assertEqual(calendar.get_payload(decode=True), part['content'].encode())
+            self.assertEqual(calendar.get_param('method'), 'REQUEST')
+            self.assertEqual(request['To'], row['to'])
+            self.assertFalse(request.get_all('Cc') or request.get_all('Bcc'))
+
+        with patch.object(mailer.getpass, 'getpass', return_value='local-only'), patch.object(mailer.smtplib, 'SMTP_SSL') as smtp, contextlib.redirect_stdout(io.StringIO()):
+            client = smtp.return_value.__enter__.return_value
+            client.send_message.side_effect = [None, None, TimeoutError('Uncertain calendar delivery')]
+            with self.assertRaises(TimeoutError):
+                mailer.run(self.settings, self.root/'mail', 'confirm', send=True)
+        receipts = list((self.root/'mail/outbox').glob('*-delivery.json'))
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual([part['status'] for part in json.loads(receipts[0].read_text())], ['accepted', 'accepted', 'attempted'])
+        self.assertNotIn(row['id'], [person['id'] for person in self.preview('confirm')['messages']])
+        with patch.object(mailer.getpass, 'getpass', return_value='local-only'), patch.object(mailer.smtplib, 'SMTP_SSL') as smtp, contextlib.redirect_stdout(io.StringIO()):
+            mailer.run(self.settings, self.root/'mail', 'confirm', send=True)
+            self.assertTrue(all(call.kwargs['to_addrs'] != [row['to']] for call in smtp.return_value.__enter__.return_value.send_message.call_args_list))
+        self.assertEqual(self.preview('confirm')['messages'], [])
 
     def test_clients_reject_redirects_without_contacting_the_destination(self):
         visited = []

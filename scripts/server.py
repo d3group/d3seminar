@@ -301,7 +301,7 @@ def page(title, body):
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             '<meta name="referrer" content="same-origin"><title>' + html.escape(title) + ' · D3 Seminar</title>'
             '<link rel="stylesheet" href="/styles.css"></head><body><header class="masthead">'
-            '<img class="university-logo" src="/assets/uni-wuerzburg.svg" width="347" height="152" alt="Julius-Maximilians-Universität Würzburg">'
+            '<img class="university-logo" src="/assets/uni-wuerzburg.svg?v=202610" width="922" height="272" alt="Julius-Maximilians-Universität Würzburg">'
             '<img class="d3-logo" src="/assets/d3.svg" width="241" height="48" alt="D3 · Data Driven Decisions">'
             '</header><main class="receipt-page"><h1>' + html.escape(title) + '</h1>' + body + '</main></body></html>')
 
